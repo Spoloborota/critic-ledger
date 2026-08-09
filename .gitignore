@@ -1,0 +1,13 @@
+# OS and editor noise
+.DS_Store
+
+# Python bytecode and tool caches — CONTRIBUTING invites running the suites
+# and linters, and none of their residue belongs in history
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage*
+
+# Claude Code local (per-machine) settings
+.claude/settings.local.json

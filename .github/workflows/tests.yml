@@ -1,0 +1,205 @@
+# CI for the critic-ledger plugin.
+#
+# What runs here and what deliberately does not:
+# - the 28-case regression suite for recount.py (tests/run-regression.sh)
+#   and the 218-case pytest characterization suite (tests/unit/), both on
+#   every supported Python (3.11-3.14);
+# - an informational (never blocking) run of the ty type checker, pre-1.0;
+# - a structural validation of the plugin manifest (JSON well-formedness
+#   + required fields). The official `claude plugin validate --strict`
+#   command is NOT assumed to exist on CI runners, so this job states
+#   plainly that it runs the structural substitute instead — the strict
+#   CLI validation is part of the release procedure on the maintainer's
+#   machine;
+# - the SKILL.md frontmatter portability check (check-frontmatter.py);
+# - a lint job: ruff (select = ALL with the documented ignore list in
+#   pyproject.toml), ruff format --check, and mypy --strict over the
+#   template scripts. Versions are pinned so CI matches the versions the
+#   code was cleaned against; the regression suite runs on every Python
+#   line the scripts support (floor 3.11 through current stable 3.14).
+# - a shell-lint job: shellcheck over the two shell scripts in the tree, each
+#   in its own dialect. `shfmt` is deliberately NOT run: its output style
+#   disagrees with these files' hand-aligned layout on hundreds of lines, and
+#   reformatting them is a change to shipped artifacts, not a lint fix;
+# - a workflow-audit job: zizmor over this file, so the hardening below
+#   (SHA pins, least-privilege permissions) cannot silently regress;
+# - a link-check job: lychee over the published Markdown.
+#
+# Supply-chain policy: every `uses:` is pinned to a full commit SHA with the
+# release tag in a trailing comment; a moving tag is a mutable dependency.
+# Dependabot (.github/dependabot.yml) opens the upgrade pull requests.
+# The workflow needs nothing but read access to its own contents, and says so
+# at the top level; no job widens it.
+name: tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.14"
+      - name: install pinned linters
+        run: pip install ruff==0.16.2 mypy==2.3.0
+      - name: ruff lint (select = ALL, documented ignores in pyproject.toml)
+        run: ruff check skills/critic-ledger/templates/*.py
+      - name: ruff format check
+        run: ruff format --check skills/critic-ledger/templates/*.py
+      - name: mypy --strict
+        run: mypy --strict skills/critic-ledger/templates/
+  # Informational companion type-checker: ty is still pre-1.0 (beta), so this
+  # job never blocks the workflow — it exists to surface disagreements early.
+  ty-informational:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.14"
+      - name: ty check (non-blocking, pinned beta)
+        run: |
+          pip install ty==0.0.69
+          ty check skills/critic-ledger/templates/
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: recount.py regression suite (28 cases)
+        run: sh tests/run-regression.sh
+      - name: pytest characterization suite (218 cases)
+        run: |
+          pip install pytest==9.1.1
+          pytest tests/unit -q
+      - name: manifest structural validation (substitute for `claude plugin validate`)
+        run: |
+          python3 - << 'EOF'
+          import json, sys
+          errs = []
+          p = json.load(open(".claude-plugin/plugin.json"))
+          for f in ("name", "version", "description"):
+              if not p.get(f): errs.append(f"plugin.json: missing/empty '{f}'")
+          if not isinstance(p.get("keywords", []), list):
+              errs.append("plugin.json: 'keywords' must be an array")
+          if errs:
+              print("\n".join(errs)); sys.exit(1)
+          print("manifest structurally valid (note: this is the CI substitute; "
+                "`claude plugin validate --strict` runs in the release procedure; "
+                "the marketplace manifest lives in Spoloborota/spoloborota-plugins)")
+          EOF
+      - name: SKILL.md frontmatter portability
+        run: python3 skills/critic-ledger/templates/check-frontmatter.py skills/critic-ledger/SKILL.md
+  # Both shell scripts in the tree declare `#!/bin/sh` and are written to POSIX
+  # sh, so both are checked in that dialect explicitly rather than by shebang
+  # sniffing. There is no `shfmt` step: shfmt's house style disagrees with the
+  # hand-aligned layout of these files across hundreds of lines, and
+  # reformatting a shipped script is a change to the artifact, not a lint fix.
+  shell-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.14"
+      - name: install pinned shellcheck
+        # shellcheck-py 0.11.0.1 wraps shellcheck 0.11.0 — the binary the
+        # scripts were cleaned against — and pins it the way ruff and mypy are
+        # pinned above, instead of taking whatever the runner image ships.
+        run: pip install shellcheck-py==0.11.0.1
+      - name: shellcheck (POSIX sh, default severity)
+        run: |
+          shellcheck --version
+          shellcheck -s sh tests/run-regression.sh \
+                           skills/critic-ledger/templates/copy-project.sh
+  # Coverage is a dynamic measurement, not a lint, and it does not vary
+  # meaningfully by interpreter version — so it runs once, in its own job,
+  # rather than four times inside the test matrix. The floor and the
+  # subprocess-measurement configuration live in pyproject.toml.
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.14"
+      - name: coverage of the template scripts (floor gate)
+        env:
+          # Outside the work tree: `patch = subprocess` writes one data file per
+          # measured process, and the measured subprocesses run with their own
+          # working directory under pytest's tmp_path.
+          COVERAGE_FILE: ${{ runner.temp }}/coverage/data
+        run: |
+          pip install coverage==7.15.4 pytest==9.1.1
+          mkdir -p "$(dirname "$COVERAGE_FILE")"
+          coverage run -m pytest tests/unit -q
+          coverage combine
+          {
+            echo '### Coverage — skills/critic-ledger/templates'
+            echo
+            coverage report --format=markdown --fail-under=0
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The gate itself, after the summary is written, so a failure below
+          # the floor still leaves the table in the job summary.
+          coverage report
+  # Guards the hardening in this very file: SHA pins, the least-privilege
+  # permissions block, and credential persistence on checkout.
+  workflow-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.14"
+      - name: zizmor (static analysis of GitHub Actions)
+        # Offline mode (zizmor's default without a token) is deliberate: it
+        # keeps the audit deterministic and independent of GitHub API quota.
+        run: |
+          pip install zizmor==1.29.0
+          zizmor .github/workflows/
+  # Link check over the published Markdown only — the private working notes in
+  # the repository root and .roadmap/ are not part of what readers follow.
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: lychee link check
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          fail: true
+          # `--exclude` skips one citation whose publisher (NEJM, reached
+          # through doi.org) answers 403 to every automated request; the DOI
+          # resolves normally in a browser. Nothing else is excluded: the
+          # remaining external links were verified to answer 200 repeatedly,
+          # and relative links are resolved against the checked-out tree.
+          args: >-
+            --no-progress
+            --max-retries 3
+            --exclude 'doi\.org/10\.1056/'
+            README.md CONTRIBUTING.md CHANGELOG.md SECURITY.md
+            'docs/**/*.md' 'examples/**/*.md'
+            'agents/**/*.md' 'skills/**/*.md'

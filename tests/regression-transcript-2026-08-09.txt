@@ -1,0 +1,31 @@
+# Frozen output of `sh tests/run-regression.sh`, 2026-08-09 — evidence of a green run; regenerate by running that script.
+c01-digit-prefix-e0.md       want=0 got=0 ok
+c02-unescaped-pipe-e2.md     want=2 got=2 ok
+c03-escaped-pipe-e0.md       want=0 got=0 ok
+c04-short-row-e2.md          want=2 got=2 ok
+c05-inconsistent-e1.md       want=1 got=1 ok
+c06-appendix-excluded-e0.md  want=0 got=0 ok
+c07-residue-unsigned-e1.md   want=1 got=1 ok
+c08-residue-signed-e0.md     want=0 got=0 ok
+c09-bare-aliases-e1.md       want=1 got=1 ok
+c10-superseded-row-e1.md     want=1 got=1 ok
+c11-frozen-e3.md             want=3 got=3 ok
+c12-kill-warning-e0.md       want=0 got=0 ok
+c13-duplicate-id-e2.md       want=2 got=2 ok
+c14-cur-e1.md                want=1 got=1 ok
+DELTA vs <tmpdir>/c14-prev-old.md: newly-terminal ['DA-1'] | regressed [] | still-open [] | new-open ['VE-1']
+c15-eight-cell-e0.md         want=0 got=0 ok
+c16-otherwise-desc-e0.md     want=0 got=0 ok
+c17-otherwise-nodesc-e1.md   want=1 got=1 ok
+c18-refused-signed-e0.md     want=0 got=0 ok
+c19-refused-bare-e1.md       want=1 got=1 ok
+c20-criterion-empty-e2.md    want=2 got=2 ok
+c21-criterion-set-e2.md      want=2 got=2 ok
+c22-six-cell-row-e2.md       want=2 got=2 ok
+c23-residue-nodate-e1.md     want=1 got=1 ok
+c24-residue-parens-e1.md     want=1 got=1 ok
+c25-refused-nodate-e1.md     want=1 got=1 ok
+c26-residue-nocrit-e2.md     want=2 got=2 ok
+c27-residue-dashcrit-e2.md   want=2 got=2 ok
+c28-residue-crit-e0.md       want=0 got=0 ok
+ALL FIXTURES PASS

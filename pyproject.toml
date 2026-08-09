@@ -1,0 +1,115 @@
+# Lint/type-check configuration for the plugin's Python scripts
+# (skills/critic-ledger/templates/*.py). There is no Python package to
+# build here — the scripts are standalone, stdlib-only, invoked directly —
+# so this file carries tooling configuration only.
+#
+# Policy: the strictest available baseline (ruff `select = ALL`,
+# `mypy --strict`), with a short ignore list where every entry states its
+# reason. A rule is ignored only when it contradicts what these scripts
+# are, never for convenience.
+
+[tool.ruff]
+line-length = 88
+# Floor: Python 3.11 — 3.10 leaves security support 2026-10-31, weeks after
+# this project's first release, so it is not a defensible floor for scripts
+# that run on end users' machines.
+target-version = "py311"
+include = ["skills/critic-ledger/templates/*.py"]
+# `select = ALL` silently adopts new rules on every ruff upgrade (the official
+# docs warn about exactly this), so the ruff version is pinned here and in CI;
+# upgrades are deliberate, with a re-lint.
+required-version = "==0.16.2"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  # These are CLI tools: stdout IS their output contract (ledger recounts,
+  # gate verdicts, diff reports are printed for the orchestrator to read).
+  "T201",    # print() is the interface, not debug residue
+  # Licensing lives in the repository-level MIT LICENSE file; per-file
+  # copyright headers are not used in this project.
+  "CPY001",
+  # Complexity refactors of these battle-tested scripts are deliberately
+  # out of scope: the project's own discipline (CONTRIBUTING.md) gates
+  # behavioral rewrites behind a critic round, and linear, explicit
+  # control flow is preferred over decomposition for auditability.
+  "C901", "PLR0911", "PLR0912", "PLR0915",
+  # One-line docstring formatting pedantry that adds nothing to scripts
+  # whose docstrings are operational contracts, not API documentation.
+  "D203",    # incompatible with D211 (ruff itself warns)
+  "D213",    # incompatible with D212
+  # The formatter owns trailing commas; ruff itself warns that COM812
+  # conflicts with it and recommends disabling the rule when both run.
+  "COM812",
+]
+# The ledger file format itself uses typographic characters (`…` marks a
+# deliberate trim; `—` and `→` appear in printed verdict lines), so they
+# are data, not typos.
+allowed-confusables = ["…", "—", "–", "→", "×"]
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "double"
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+files = ["skills/critic-ledger/templates"]
+# NOT part of --strict, and worth having: unreachable branches are exactly
+# the defect class strict typing is meant to surface.
+warn_unreachable = true
+# Opt-in error codes beyond --strict (mypy bundles none of these):
+enable_error_code = [
+  "ignore-without-code",   # every type: ignore names the code it silences
+  "redundant-expr",        # conditions that are statically always true/false
+  "possibly-undefined",    # variables that may be unbound on some paths
+  "explicit-override",     # overrides must say @override
+  "unused-awaitable",      # a coroutine created and never awaited
+]
+
+[tool.pytest.ini_options]
+# Characterization ("golden behavior") suite for the shipped CLI scripts.
+# Every test invokes a script as a subprocess and pins its current argv,
+# stdout/stderr, exit-code and filesystem contract; fixtures live entirely
+# under pytest's tmp_path. The scripts directory can be redirected with
+# CRITIC_LEDGER_SCRIPTS_DIR (see tests/unit/conftest.py) to run the same
+# suite against a candidate copy of the scripts.
+# The suite uses only long-stable pytest features (plain test functions,
+# tmp_path, parametrize), so the floor is deliberately low; it was written
+# and validated against pytest 9.1.1, which is the version to pin in CI.
+minversion = "7.0"
+testpaths = ["tests/unit"]
+addopts = "-ra --strict-markers --strict-config"
+xfail_strict = true
+
+[tool.coverage.run]
+# The characterization suite runs every script as a SUBPROCESS — argv, stdout
+# and exit codes are the contract those scripts publish — so an ordinary
+# in-process measurement sees nothing at all. `patch = ["subprocess"]`
+# (coverage.py 7.10+) instruments the children as well; it implies
+# `parallel = true`, so a run leaves one data file per process and
+# `coverage combine` has to run before `coverage report`.
+# Point COVERAGE_FILE at a directory OUTSIDE the work tree before running
+# (see CONTRIBUTING.md): the per-process data files are build residue, and the
+# subprocesses run with their own working directory under pytest's tmp_path,
+# so a relative data-file path would scatter them where combine cannot find
+# them.
+source = ["skills/critic-ledger/templates"]
+patch = ["subprocess"]
+relative_files = true
+# The parent process of the run is pytest, which is not in `source`, so its own
+# data file is legitimately empty and coverage warns about it once per run.
+# Silencing it does not hide a broken measurement: an actually empty run makes
+# `coverage report` exit 1 with "No data to report.", and a run below the floor
+# exits 2 — both verified.
+disable_warnings = ["no-data-collected"]
+
+[tool.coverage.report]
+# A floor, not a target. Measured at 0.1.0: 94.45% (1243 statements, 69
+# missed). The gate sits two points below that so a platform-dependent branch
+# or a re-ordered run cannot fail CI on noise; it is raised deliberately, the
+# way the linter pins are.
+fail_under = 92
+show_missing = true
