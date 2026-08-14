@@ -3,8 +3,9 @@
 The script inventories the top-level fields of a SKILL.md frontmatter block
 and classifies them as portable, platform extension or unknown. Exit codes:
 0 = no unknown fields (and, under --strict-portable, no extensions either),
-1 = unknown fields (or extensions under --strict-portable), 2 = unreadable
-file, structurally broken frontmatter, or a usage error.
+or `-h`/`--help`; 1 = unknown fields (or extensions under
+--strict-portable), 2 = unreadable file, structurally broken frontmatter,
+or a usage error.
 """
 
 from __future__ import annotations
@@ -212,12 +213,21 @@ def test_wrong_argument_count_prints_usage(run, argv):
     assert "Usage:  check-frontmatter.py <SKILL.md> [--strict-portable]" in res.stdout
 
 
-def test_repeated_strict_flag_is_a_usage_error(run, tmp_path):
-    """Only one occurrence is removed from argv, so the second stays a path."""
+@pytest.mark.parametrize("flag", ["-h", "--help"])
+def test_help_flags_print_usage_and_exit_zero(run, tmp_path, flag):
+    """Help wins over the file argument: no read is attempted, exit 0."""
+    res = run(SCRIPT, skill(tmp_path, MINIMAL), flag)
+    assert res.returncode == 0, res.stdout
+    assert "Usage:  check-frontmatter.py <SKILL.md> [--strict-portable]" in res.stdout
+    assert "frontmatter of" not in res.stdout
+
+
+def test_repeated_strict_flag_is_idempotent(run, tmp_path):
+    """Every occurrence is filtered out of argv, so a repeat changes nothing."""
     res = run(SCRIPT, "--strict-portable", skill(tmp_path, MINIMAL),
               "--strict-portable")
-    assert res.returncode == 2, res.stdout
-    assert "Usage:  check-frontmatter.py" in res.stdout
+    assert res.returncode == 0, res.stdout
+    assert "OK: no unknown fields. Portable as is." in res.stdout
 
 
 def test_missing_file_is_reported(run, tmp_path):

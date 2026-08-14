@@ -95,3 +95,7 @@ declares (the `CLAUDE_CODE_SUBAGENT_MODEL` environment variable overrides
 every subagent's model silently), note that in your report header — a
 "verifier from a different model family" expectation collapses silently under
 that variable.
+That self-report is the FALLBACK, never the primary: the round's primary
+source for the model actually applied is the platform's `resolvedModel` on
+the completed Agent tool result, and the self-report is read only when that
+field is absent.

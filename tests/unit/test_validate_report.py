@@ -2,8 +2,8 @@
 
 The script is the deterministic half of critic-report acceptance: it turns
 id-prefix and severity defects into PROBLEMS (exit 1) and everything softer
-into MARKS (never affecting the exit code). Exit codes: 0 = no problems,
-1 = problems found, 2 = unreadable report or bad arguments.
+into MARKS (never affecting the exit code). Exit codes: 0 = no problems
+(help is 0 too), 1 = problems found, 2 = unreadable report or bad arguments.
 """
 
 from __future__ import annotations
@@ -210,6 +210,15 @@ def test_missing_header_fields_and_coverage_are_notes(run, report):
     assert "notes=4" in res.stdout
 
 
+def test_a_coverage_marker_on_the_last_line_is_recognized(run, report):
+    """The body is joined without separators; a marker at the end still reads."""
+    text = bare("GA-1 | major | claim (a.py:1)", "coverage: the whole module")
+    res = run(SCRIPT, report(text), "GA")
+    assert res.returncode == 0, res.stdout
+    assert "no coverage statement recognized" not in res.stdout
+    assert "notes=3" in res.stdout
+
+
 def test_marks_never_change_the_exit_code(run, report):
     res = run(SCRIPT, report(bare("GA-1 | major | claim without evidence")), "GA")
     assert res.returncode == 0, res.stdout
@@ -257,9 +266,9 @@ def test_wrong_argument_count_prints_usage(run, argv):
 
 
 @pytest.mark.parametrize("flag", ["-h", "--help"])
-def test_help_flags_print_usage_and_exit_two(run, report, flag):
+def test_help_flags_print_usage_and_exit_zero(run, report, flag):
     res = run(SCRIPT, report(FULL_REPORT), "GA", flag)
-    assert res.returncode == 2, res.stdout
+    assert res.returncode == 0, res.stdout
     assert "Usage:  validate-report.py" in res.stdout
 
 

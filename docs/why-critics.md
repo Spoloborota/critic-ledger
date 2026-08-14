@@ -9,7 +9,7 @@ All measurements below are **self-reported counters from the author's private
 research — confidence grade C** (the scale: A — an external controlled study;
 B — an internal controlled comparison; C — self-reported counters, no external
 arbiter): no control group beyond the one A/B described, counting done by the
-project that benefited. One figure is not such a counter, flagged in §4:
+project that benefited. One figure is not such a counter, flagged in section 4:
 verifier independence (F1 28.6% against 24.6%) is external published research.
 
 ## 1. The symptom: findings that never converge
@@ -158,7 +158,7 @@ fresh verifier" rests on it.
   the critic and verifier spawns were genuinely independent is an assertion in a
   report header, not something a read-only audit derives.
 - **Defects caught on the tool itself**, which gets no privilege: the two
-  closure-script blockers (§6), and a fix batch that carried 12 identifiers
+  closure-script blockers (see section 6), and a fix batch that carried 12 identifiers
   against a contractual limit of 10, recorded as a durable deviation.
 
 ## 5. 16.6% against 70%, reconciled
@@ -209,7 +209,7 @@ targeted insertions, never by rewriting its own text — rewrites lose content.
 5. **Convergence signal: two consecutive clean passes; the remainder then runs
    in bundled micro-batches keeping per-id verdicts, and the CLOSING pass goes
    to a fresh verifier.** Forced by the cost of the full mandate on a shrinking
-   remainder; validated on 58 findings, at ×2.7–8.5 lower cost (§4).
+   remainder; validated on 58 findings, at ×2.7–8.5 lower cost (see section 4).
 6. **The closure script parses fail-closed.** A critic pointed out that the rule
    demanded script-computed arithmetic while none shipped — a norm with no
    carrier. The script then proved to drop rows silently, and the worse case

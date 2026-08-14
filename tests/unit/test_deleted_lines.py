@@ -95,6 +95,9 @@ def test_paths_swallows_following_positionals(run, repo_two_commits):
     res = run(SCRIPT, "--repo", repo.path, "--paths", "file.txt", second)
     assert res.returncode == 2, res.stdout
     assert "ERROR: no commits given" in res.stderr
+    assert (f"note: --paths consumed 2 token(s) (file.txt, {second}); "
+            "--paths is greedy, so put commits BEFORE it or end the list "
+            "with a bare '--'" in res.stderr)
 
 
 # --- the listing -----------------------------------------------------------

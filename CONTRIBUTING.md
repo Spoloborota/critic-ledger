@@ -18,12 +18,12 @@ COVERAGE_FILE=$(mktemp -d)/data uvx --from coverage --with pytest sh -c '
 
 Two test layers, then two checks over them.
 
-- The shell suite: 28 cases against
+- The shell suite: 38 cases against
   `skills/critic-ledger/templates/recount.py` — the script that arbitrates round
   closure — each named with its expected exit code (`e0`/`e1`/`e2`/`e3`); it
   prints `ALL FIXTURES PASS` and exits 0 when green.
-- The pytest suite: 218
-  characterization tests covering all six template scripts as real CLIs
+- The pytest suite: 526
+  characterization tests covering all eight template scripts as real CLIs
   (argv, stdout, exit codes, filesystem effects), written against a pinned
   behavior baseline so that any behavioral change fails loudly and must be
   deliberate.

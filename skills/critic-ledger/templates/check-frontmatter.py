@@ -3,8 +3,8 @@
 # requires-python = ">=3.11"
 # ///
 """Mechanical frontmatter check for a SKILL.md against the PORTABLE Agent
-Skills specification (finding GC-9). The skill's own header is edited by
-hand; six-field compatibility otherwise rests on nobody forgetting it.
+Skills specification. The skill's own header is edited by hand;
+six-field compatibility otherwise rests on nobody forgetting it.
 
 SCOPE — SKILL.md HEADERS ONLY. Every vocabulary below (the portable six
 and the platform extensions) is the SKILL frontmatter vocabulary. Agent
@@ -51,16 +51,11 @@ Parsing contract (stdlib only, no YAML library)
   --strict`; this script's contract is the field INVENTORY.
 
 Usage:  check-frontmatter.py <SKILL.md> [--strict-portable]
+        check-frontmatter.py -h | --help             (this text, exit 0)
 Exit codes: 0 = no unknown fields (and, under --strict-portable, no
-platform extensions either); 1 = unknown fields present — each named — or
-`--strict-portable` with a non-empty extension list; 2 = the file cannot
-be read, or its frontmatter is structurally broken.
-
-Provenance note: design/NN-*.md paths, round names (design-r1,
-skill-md-r1, ...), round-report paths (critic-rounds/<round>/...) and
-finding ids (GD-#, GC-#, ...) cited here point at the author's private
-development notes; they are provenance markers, not files shipped with
-this plugin.
+platform extensions either), or `-h`/`--help`; 1 = unknown fields present
+— each named — or `--strict-portable` with a non-empty extension list;
+2 = the file cannot be read, or its frontmatter is structurally broken.
 """  # noqa: D205  # printed verbatim as the usage text; reflowing changes output
 
 import re
@@ -164,9 +159,11 @@ def show(label: str, values: list[str]) -> None:
 def main() -> int:
     """Run the frontmatter check and return the process exit code."""
     args = sys.argv[1:]
+    if any(a in ("-h", "--help") for a in args):
+        print(__doc__)
+        return 0
     strict = "--strict-portable" in args
-    if strict:
-        args.remove("--strict-portable")
+    args = [a for a in args if a != "--strict-portable"]
     if len(args) != 1:
         print(__doc__)
         return 2

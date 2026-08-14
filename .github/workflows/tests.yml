@@ -1,8 +1,8 @@
 # CI for the critic-ledger plugin.
 #
 # What runs here and what deliberately does not:
-# - the 28-case regression suite for recount.py (tests/run-regression.sh)
-#   and the 218-case pytest characterization suite (tests/unit/), both on
+# - the 38-case regression suite for recount.py (tests/run-regression.sh)
+#   and the 526-case pytest characterization suite (tests/unit/), both on
 #   every supported Python (3.11-3.14);
 # - an informational (never blocking) run of the ty type checker, pre-1.0;
 # - a structural validation of the plugin manifest (JSON well-formedness
@@ -17,8 +17,11 @@
 #   template scripts. Versions are pinned so CI matches the versions the
 #   code was cleaned against; the regression suite runs on every Python
 #   line the scripts support (floor 3.11 through current stable 3.14).
-# - a shell-lint job: shellcheck over the two shell scripts in the tree, each
-#   in its own dialect. `shfmt` is deliberately NOT run: its output style
+# - a shell-lint job: shellcheck over the two SHIPPED shell scripts, named
+#   explicitly in the job below — tests/run-regression.sh and
+#   skills/critic-ledger/templates/copy-project.sh. (The development tree
+#   also holds tools/release.sh and per-round check scripts; none of them
+#   ship, so none are linted here.) `shfmt` is deliberately NOT run: its style
 #   disagrees with these files' hand-aligned layout on hundreds of lines, and
 #   reformatting them is a change to shipped artifacts, not a lint fix;
 # - a workflow-audit job: zizmor over this file, so the hardening below
@@ -79,12 +82,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Regression case c33 reads the PREVIOUS RELEASE's recount.py out of
+          # git (`git describe --tags --abbrev=0`, then `git show <tag>:...`) to
+          # test the byte-compatibility claim rather than assert it. The
+          # default shallow checkout reaches neither the tag nor the history
+          # that connects HEAD to it, and the case prints SKIPPED instead of
+          # running. Full history is what makes both reachable — `fetch-tags`
+          # alone would bring the tag ref without the ancestry `git describe`
+          # walks. Verified against the real v0.1.0 tag on 2026-08-11: exit 0,
+          # `new-findings curve: 5 -> 3 -> 1` (tests/COVERAGE-MATRIX-0.2.0.md).
+          fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      - name: recount.py regression suite (28 cases)
+      - name: recount.py regression suite (38 cases)
         run: sh tests/run-regression.sh
-      - name: pytest characterization suite (218 cases)
+      - name: pytest characterization suite (526 cases)
         run: |
           pip install pytest==9.1.1
           pytest tests/unit -q
@@ -106,9 +119,12 @@ jobs:
           EOF
       - name: SKILL.md frontmatter portability
         run: python3 skills/critic-ledger/templates/check-frontmatter.py skills/critic-ledger/SKILL.md
-  # Both shell scripts in the tree declare `#!/bin/sh` and are written to POSIX
-  # sh, so both are checked in that dialect explicitly rather than by shebang
-  # sniffing. There is no `shfmt` step: shfmt's house style disagrees with the
+  # Both SHIPPED shell scripts — the two named in the shellcheck step below —
+  # declare `#!/bin/sh` and are written to POSIX sh, so both are checked in that
+  # dialect explicitly rather than by shebang sniffing. The list is written out
+  # rather than globbed: `*.sh` in a development checkout also matches
+  # tools/release.sh and the per-round check scripts, which are excluded from
+  # releases. There is no `shfmt` step: shfmt's house style disagrees with the
   # hand-aligned layout of these files across hundreds of lines, and
   # reformatting a shipped script is a change to the artifact, not a lint fix.
   shell-lint:

@@ -468,7 +468,7 @@ def test_recent_manifest_is_skipped(run, scratch):
               "--confirm")
     assert res.returncode == 0, res.stdout
     assert "status: SKIPPED — age 1.0" in res.stdout
-    assert "is below the --older-than-hours 24.0 threshold" in res.stdout
+    assert "is below the --older-than-hours 24 threshold" in res.stdout
     assert "summary: deleted=0 refused=0 already-absent=0 skipped=1" in res.stdout
     assert unit.target.is_dir()
 
@@ -507,6 +507,25 @@ def test_size_disagreement_is_a_note_not_a_refusal(run, scratch):
     res = run(SCRIPT, "--root", scratch.root)
     assert res.returncode == 0, res.stdout
     assert "note: mismatch note: manifest says 9.5 MiB, on disk " in res.stdout
+    assert "status: PLANNED" in res.stdout
+
+
+def test_zero_size_declaration_still_gets_a_note(run, scratch):
+    """A declared 0 is compared like any other value, not treated as absent."""
+    scratch.make_run(size_bytes=0)
+    res = run(SCRIPT, "--root", scratch.root)
+    assert res.returncode == 0, res.stdout
+    assert "note: mismatch note: manifest says 0 B, on disk " in res.stdout
+    assert "status: PLANNED" in res.stdout
+
+
+def test_empty_target_against_a_nonzero_declaration_gets_a_note(run, scratch):
+    """The mirror case: nothing on disk, a non-zero declaration."""
+    scratch.make_run(contents={}, size_bytes=10_000_000,
+                     manifest_at=scratch.sidecar_path("sample-run"))
+    res = run(SCRIPT, "--root", scratch.root)
+    assert res.returncode == 0, res.stdout
+    assert "note: mismatch note: manifest says 9.5 MiB, on disk 0 B" in res.stdout
     assert "status: PLANNED" in res.stdout
 
 

@@ -6,7 +6,6 @@ description: >-
   critics, refute-by-default adjudication, targeted fix batches, independent
   per-finding verification, convergence signal, programmatic closure. This is
   an expensive multi-agent procedure. Use ONLY on explicit user request.
-disable-model-invocation: true
 argument-hint: "plan <path> | impl <path|commit-range>"
 ---
 
@@ -69,9 +68,9 @@ fit". If the object to review was not named, STOP and ask for it.
    findings marked as the security/PII class when they were ruled on; for
    those a refusal is terminal too. Both `accepted-residue` and
    `refused-user-signed` require the user's explicit signature in machine
-   form (`user-signed <date>` / `refused-user-signed <date>`) — silence is
-   not a status. The round closes only when a programmatic recount reports
-   zero non-terminal rows.
+   form (`user-signed <date>` / `refused-user-signed <date>`, the date a
+   calendar-valid ISO one) — silence is not a status. The round closes only
+   when a programmatic recount reports zero non-terminal rows.
 
 Severity taxonomy (same for this file and all prompts): **blocker** = the
 object is unfit for its purpose or a fix would cause irreversible harm;
@@ -243,12 +242,70 @@ the assigned ones, and flags the divergence there whenever the two differ.
 
 **Platform reality — the agents' "orchestrator-only" rule is not enforced.**
 Agent definitions have no `disable-model-invocation` equivalent (that field
-exists for skills, and this skill uses it): nothing at the platform level
-stops a session from auto-delegating to a `critic-ledger` agent by
-description match outside a round. The only guard is the description text of
+exists for skills; this skill deliberately does NOT set it, so that a plain
+prose request can trigger a round — the Gate section above and the
+description's "explicit user request" requirement are the guard): nothing at
+the platform level stops a session from auto-delegating to a `critic-ledger`
+agent by description match outside a round. The only guard is the description text of
 each definition. This residual risk is ACCEPTED and stated here rather than
 papered over — exactly like the fixer's no-git guarantee, which is mechanical
 (Bash absent from the tool set) where this one is not.
+
+## Observability (optional, default off)
+
+Measuring the round's own COST — one span per unit of work in the run
+folder's `trace.jsonl`, written by
+`${CLAUDE_PLUGIN_ROOT}/skills/critic-ledger/templates/trace.py`, and a
+`round-summary.json` beside the ledger, produced by
+`${CLAUDE_PLUGIN_ROOT}/skills/critic-ledger/templates/rollup.py` — is
+OPTIONAL and OFF by default. The switch is read from exactly one line, and
+that line is here:
+
+Observability flag (substituted at load): ${user_config.observability}
+
+**Anything other than the exact literal `true` means OFF** — an
+unsubstituted placeholder, an empty value, `False`, `1`, or a missing line
+all mean off. This inverts the project's usual fail-closed polarity ON
+PURPOSE, and the inversion is stated rather than hidden: every other gate
+here fails toward "stop", this one fails toward "collect nothing". The
+unsubstituted case is the COMMON case — when the payload is read as plain
+files rather than as an installed plugin, the placeholder stays literal
+and is therefore not `true`.
+
+**Off, nothing happens at any stage**: no file created, no directory
+created, no extra instruction read, no number collected. Every per-stage
+observability sentence in the stage machine below is conditional on the
+flag, and each is a no-op while it is off; the ledger's `- Observability:`
+and `- Trace:` header lines then read `off` and `none (observability
+off)`, which is what tells a later reader that missing numbers mean "off"
+and not "lost".
+
+**The privacy invariant.** Everything observability produces is a LOCAL
+file the person who ran the round owns. Nothing is sent anywhere. There is
+no endpoint, no opt-in-to-share, no aggregation service, and no extension
+point where one could be added later without re-opening this discipline
+through a round of its own. Numbers reach THIS PLUGIN's author only from
+his own machine, and from machines whose users switched the flag on
+themselves. The trace
+carries no free-text field at all — every value is an enumeration or an
+anchored, length-bounded pattern — which is why it needs no sanitization
+pass before it can be shown to anyone, unlike the salvaged reports.
+
+**A missing number is `n/a: <reason>` — never a failure, and never a
+blocked round.** A token count that did not arrive is written as JSON
+`null` with `tokens_source: "absent"`: never `0`, never `-1`, never
+omitted. No metric, script or gate fails because a number is absent, and
+the recount's exit codes gain no new value; a missing or unreadable
+`trace.jsonl` is reported and changes nothing. Every derived figure that
+consumed a `null` prints its coverage inline — `TVR: n/a (7 of 11 spans
+without usage)` — instead of averaging the rest, which would be a lie by
+omission. Nothing on the observability list can fail a round: a trace
+write that errors emits ONE bounded diagnostic line, from a closed
+error-class vocabulary and never echoing what it could not read, and the
+round continues. A negative claim about usage ("this round had no token
+data") is admissible only with the capture's own output attached — the
+same rule that makes an unproven negative "not checked" rather than
+"absent".
 
 ## Stage machine
 
@@ -265,7 +322,13 @@ papered over — exactly like the fixer's no-git guarantee, which is mechanical
    ledger header: pins are commit hashes, fixes stay uncommitted, fix cells
    reference before/after snapshot pairs, diffs run against the uncommitted
    working state, and the ledger's "Batch-commit executor" field reads
-   `none (degraded)`. Output: a prerequisite line in the ledger header.
+   `none (degraded)`.
+   **With observability on**, read the flag HERE and fix the value of the
+   ledger's `- Observability:` header line — no span is written at this
+   stage and none is possible, since neither the run folder nor the ledger
+   exists yet, so that line, exactly like the prerequisite line itself, is
+   materialized into the ledger at stage 1(c).
+   Output: a prerequisite line in the ledger header.
 1. **Run folder.** Explicit sub-steps, in this order:
    **(a) Ignore-list BEFORE the folder.** `.critic-ledger/` is entered
    into the project's `.gitignore` and the entry confirmed BEFORE the run
@@ -284,6 +347,15 @@ papered over — exactly like the fixer's no-git guarantee, which is mechanical
    tell the user plainly that the folder was created and ignored.
    **(c) Blank ledger** `fix-ledger.md` from `${CLAUDE_PLUGIN_ROOT}/skills/critic-ledger/templates/ledger.md`, created
    in the run folder HERE — before any critic is spawned.
+   **With observability on**, create an empty `trace.jsonl` in the run
+   folder and append to it, with
+   `${CLAUDE_PLUGIN_ROOT}/skills/critic-ledger/templates/trace.py append`,
+   the `open` record of the round span `s1.00` (`stage: 1`,
+   `parent: null`, actor `orchestrator`, unit `round`) whose `kind: "span"`
+   close record is written only at stage 9 — a round interrupted before
+   then leaves `s1.00` unclosed and a reader says so rather than inventing
+   an end — then write the header lines fixed at stage 0 and fill
+   `Round-started` and `Trace:`.
    Output: the run folder in place with its `critics/` and `verify/`
    subdirectories, the ignore entry confirmed, and a blank ledger inside it.
 2. **Scope and lenses.** Explicit sub-steps, in this order:
@@ -329,6 +401,12 @@ papered over — exactly like the fixer's no-git guarantee, which is mechanical
    every lens and that fact is recorded in the header rather than papered
    over. The number of simultaneous clones of a private tree equals the
    agent sum, not the lens count.
+   **With observability on**, append one `orchestrator` span for the
+   scoping step — `unit: "scoping"`, closing `outcome: "scoped"`. The
+   `model_assigned` of each unit is recorded on that unit's OWN span when
+   it opens, never here; and the id prefixes fixed at (a) — one per lens,
+   plus the round's verifier-prefix stem — are what every later span
+   carries in `id_prefix`.
    Output: a ledger file with a filled header and the critics' copies made.
 3. **Critic round.** Parallel spawn of one critic per lens, by the agent-type
    identifier (bare name where unambiguous): `plan` mode
@@ -355,8 +433,13 @@ papered over — exactly like the fixer's no-git guarantee, which is mechanical
    itself: the verdict "re-run this lens" is the orchestrator's call, or one
    false positive burns a whole critic run. A report that fails acceptance
    causes ONE respawn of the lens with a tightened contract; a second
-   failure is recorded in the ledger header as a dropped lens. Output: N
-   reports accepted by the criteria.
+   failure is recorded in the ledger header as a dropped lens.
+   **With observability on**, open one `critic` span per lens at its spawn
+   and close it at report acceptance, recording that spawn's own
+   `usage`/`totalTokens`/`resolvedModel`/`agentId` from the tool result and
+   `outcome: findings:<n>` — a re-spawned lens carries `flags:["respawn"]`,
+   a dropped one `outcome:"dropped"`.
+   Output: N reports accepted by the criteria.
 4. **Immediate salvage.** Each report is preserved verbatim in a durable
    file before any other work — and again after EVERY append to a report
    or salvage file, within the same batch (a single-shot salvage loses
@@ -372,6 +455,11 @@ papered over — exactly like the fixer's no-git guarantee, which is mechanical
    expected report is saved or its lens is declared dropped. Salvage verify:
    the id set in the salvage equals the id set in the report. The reprint
    cost is acknowledged and accepted — it buys the durability guarantee.
+   **With observability on**, append one `orchestrator` span per salvage
+   write — `unit: "salvage"`, `outcome: "salvaged"`, `tokens: null` —
+   several salvages in a round sharing that unit and told apart by their
+   `span` seq; it is never a `script` span, because salvage is an
+   orchestrator action and there is no salvage script to name in one.
    Output: one salvage file per lens under `critics/`.
 5. **Mechanical layout.** Mechanical transcription comes first, before any
    judging:
@@ -382,7 +470,10 @@ papered over — exactly like the fixer's no-git guarantee, which is mechanical
    and it fails CLOSED: a line that looks like a finding but does not parse
    stops the transcription with a structural error instead of being
    silently skipped. The main loop then fills only `verdict` and
-   `criterion`, at stage 6 and never here. Output: a ledger skeleton with
+   `criterion`, at stage 6 and never here.
+   **With observability on**, append one `script` span for that
+   `transcribe.py` run.
+   Output: a ledger skeleton with
    one row per finding, the `id`/`severity`/`claim` cells filled by literal
    copy and every other cell empty.
 6. **Adjudication.** Main loop, never a subagent — a subagent has neither
@@ -448,7 +539,12 @@ papered over — exactly like the fixer's no-git guarantee, which is mechanical
    the very file that defines the check is invalid.
    Zero-confirmed branch (everything refuted or nothing found): skip
    stages 7–8 and the loop-and-convergence part of stage 9, go straight to
-   its closure part. Output: every id has a verdict and a
+   its closure part.
+   **With observability on**, append one `orchestrator` span per
+   adjudication batch with its `ids`, its `id_tags` — this is where
+   `fix-application` and `security-pii` are set, at ruling time and never
+   retroactively — and `outcome: upheld:<n>,refuted:<m>`.
+   Output: every id has a verdict and a
    non-empty criterion cell.
 7. **Fix batches.** The fixer is a SEPARATE subagent, one per batch, spawned
    by the agent-type identifier `critic-ledger:fixer` (bare `fixer` where
@@ -507,7 +603,11 @@ papered over — exactly like the fixer's no-git guarantee, which is mechanical
    current statuses, a frozen ledger is never closable (the recount
    reports it as a distinct state). The rewritten artifact is a NEW
    object and a new full round, and the adjudicated-but-unlanded ids
-   enter the new round's disposition. Output: batch committed, fix cells
+   enter the new round's disposition.
+   **With observability on**, append one `fixer` span per batch with its
+   `ids`, the batch's `commit`, `outcome: fixed:<n>,unworkable:<m>`, and
+   the same tool-result capture as stage 3.
+   Output: batch committed, fix cells
    filled.
 8. **Verification.** A FRESH verifier on EVERY pass, spawned by the agent-type
    identifier `critic-ledger:verifier` (bare `verifier` where unambiguous);
@@ -553,7 +653,16 @@ papered over — exactly like the fixer's no-git guarantee, which is mechanical
    transcribes the verifier's per-id results into the ledger's `verified`
    cells — the verifier itself is read-only and writes nothing. Verified
    cells: re-fixing an id RESETS its verified cell — terminality only
-   after the LAST fix is verified. Output: every id in scope has
+   after the LAST fix is verified.
+   **With observability on**, append one `script` span for that
+   `deleted-lines.py` run and one `verifier` span PER VERIFIER AGENT —
+   each carrying the pass ordinal in `unit` (`P<n>`), the pass's
+   verifier-prefix in `id_prefix`, its own `ids`,
+   `outcome: L:<n>,P:<n>,NOT:<n>,new:<n>`, and `flags:["bundled"]` where it
+   applies, with the same tool-result capture as stage 3 — then copy the
+   pass's aggregated `started`/`ended` (earliest open, latest close across
+   its spans) into the passes table's two trailing columns.
+   Output: every id in scope has
    LANDED/PARTIAL/NOT with evidence, transcribed into the ledger.
 9. **Loop, convergence and closure.** Two parts, in this order.
    **Loop and convergence.** NEW verifier findings never go straight into
@@ -601,13 +710,24 @@ papered over — exactly like the fixer's no-git guarantee, which is mechanical
    has a MACHINE form, otherwise the rule is indistinguishable from its
    absence: an accepted-residue cell must contain the literal
    `user-signed <date>` and a refusal cell the literal
-   `refused-user-signed <date>` — the recount enforces both. If the user
+   `refused-user-signed <date>`, each with a calendar-valid ISO date —
+   the recount enforces both. If the user
    is unavailable for the residue signature, a legitimate session outcome
    is "round awaiting signature": everything verified, only the rows
    waiting for the user are non-terminal, closure comes with their word.
    Write the final round delta and, when needed, a disposition of previous
    rounds' findings by a separate delegation ("not re-opened by a fresh
    full pass = superseded").
+   **With observability on**, run
+   `${CLAUDE_PLUGIN_ROOT}/skills/critic-ledger/templates/rollup.py` over
+   the ledger and the round's `trace.jsonl` to write `round-summary.json`
+   beside the ledger, giving it `--rounds <path>` only where the
+   cross-project rollup is in use — the script shells out to nothing and so
+   cannot resolve `${CLAUDE_PLUGIN_DATA}/rounds.jsonl` itself, and what it
+   appends there is ONE line, the identifier-free projection of that
+   summary and never the summary itself — and only AFTER that line append
+   the closure span carrying the recount's numbers and then the round span
+   `s1.00`'s `kind: "span"` close record, the last line the round writes.
    Re-entry: the next round on the same object is a NEW RUN DIRECTORY,
    `.critic-ledger/<YYYY-MM-DD-HHMMSS-object>/` with its own
    `fix-ledger.md` — the directory carries the uniqueness, there is no
@@ -668,6 +788,24 @@ Every file listed below is addressed from `${CLAUDE_PLUGIN_ROOT}/skills/critic-l
   non-empty, a refuted one's holds the literal `—`; an empty cell is
   allowed to nobody. Closure runs through it, never through manual
   counting.
+- `templates/trace.py` — the round's span writer and validator, used only
+  when observability is on: `append` writes one record (an `open` at a
+  unit's start, the complete `span` at its close) into the run folder's
+  `trace.jsonl`, `validate` re-checks a whole file against the schema and
+  reports report-only defects. Every field is an enumeration or an
+  anchored, length-bounded pattern and a value that fails is REFUSED
+  rather than written. It is the one script here that must never fail
+  closed: its exit code is always 0, and a failure produces one
+  diagnostic line from a closed error-class vocabulary that never echoes
+  what it could not read.
+- `templates/rollup.py` — the stage-9 rollup, used only when
+  observability is on: it reads `trace.jsonl` plus the ledger and writes
+  `round-summary.json` beside the ledger together with a human table,
+  computing the round's cost and confirmation metrics with a per-metric
+  `n/a: <reason>` wherever an input is missing — never a `0` and never a
+  silent omission. `--rounds <path>` additionally appends ONE
+  identifier-free projection line to the cross-project rollup; no
+  observability condition ever reaches its exit code.
 - `templates/copy-project.sh` — makes the scratchpad copy the critics
   read: a copy-on-write clone in STRICT mode, falling back to the
   git-known file list and then to an object-only narrowing, printing

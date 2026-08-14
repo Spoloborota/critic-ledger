@@ -130,7 +130,10 @@ Then, on an object you want torn apart:
 **What a round costs:** at least 2 agent runs — two critics, when nothing they raise is
 upheld — around 4 on a typical small object, never more than the hard budget of 12
 simultaneous agents. Wall-clock, token and dollar cost is not measured, and no number
-for it is invented here; measurement ships later, as telemetry.
+for it is invented here. Since 0.2.0 the instrument exists — an optional
+`observability` flag, **off by default**, that records per-round token and duration
+counts into local files (see [Privacy](#privacy)) — but the measurement it enables has
+not been taken, so there is still no figure to quote.
 
 Results land in a per-run folder `.critic-ledger/<timestamp-object>/` inside the
 reviewed repository — that round's ledger and, where it is private, the verbatim
@@ -139,12 +142,67 @@ auto-update is off.
 
 ## Privacy
 
-The plugin makes no network calls and ships no analytics. Everything it produces
-is a local file you own: the per-run `.critic-ledger/` folder, git-ignored
-before it is created, and the scratch copies each critic reads, removed by the
-cleanup script. Where the reviewed repository is public or shared, the verbatim
-critic reports never enter it — they go instead to a local unversioned holding
-marked as not durable. Any future hook-based logging is opt-in and local-only.
+The plugin makes no network calls — nothing it produces ever leaves your
+machine. There is no analytics service and no telemetry upload of any kind.
+With observability on (it is off by default and stays off until you switch it
+on) the plugin computes metrics from your own rounds and writes them to local
+files you own and can delete.
+
+Everything it produces is a local file you own: the per-run `.critic-ledger/`
+folder, git-ignored before it is created, and the scratch copies each critic
+reads, removed by the cleanup script. Where the reviewed repository is public
+or shared, the verbatim critic reports never enter it — they go instead to a
+local unversioned holding marked as not durable.
+
+### Observability — what it is, and what it writes
+
+The flag is the plugin option `observability`: a boolean, `false` by default.
+Set it non-interactively at install time with
+`claude plugin install critic-ledger@spoloborota-plugins --config observability=true`,
+or at any time through `/plugin configure`; setting it back to `false` turns it
+off. The value is read from `pluginConfigs` in your **user** `settings.json`. On
+Claude Code **v2.1.207 and later** a repository you clone cannot switch it on
+for you — *"Entries in a project's `.claude/settings.json` or
+`.claude/settings.local.json` are ignored"* — while on **older installs** it
+can, because before v2.1.207 those entries were read.
+
+With the flag on, a round writes two files and nothing else:
+
+- **`.critic-ledger/<run>/trace.jsonl`** — one line per unit of work in that
+  round, beside that round's ledger. Deleting the file is the complete opt-out
+  for it.
+- **`~/.claude/plugins/data/critic-ledger-*/rounds.jsonl`** — one line per
+  **closed** round. This file **accumulates across rounds and across projects
+  until you delete it**; `rm ~/.claude/plugins/data/critic-ledger-*/rounds.jsonl`
+  is the complete opt-out for it, and `claude plugin uninstall` removes the whole
+  data directory unless `--keep-data` is given.
+
+**The trace's fields, in full** (`trace.jsonl`): `v`, `kind`, `round`, `span`,
+`parent`, `stage`, `actor`, `unit`, `id_prefix`, `agent_id`, `ids`, `id_tags`,
+`flags`, `model_assigned`, `model_actual`, `model_source`, `tokens`,
+`tokens_source`, `commit`, `started`, `ended`, `wallclock_s`, `outcome`. Two of
+those are identifiers rather than counts, and are named here rather than left to
+be discovered: **`agent_id`** is the platform's opaque id for the subagent spawn
+a line measures, and **`id_prefix`** is the lens or verifier prefix under which
+that actor raises findings. The rest are counts, durations, closed vocabularies
+and the run folder's own name. **No field carries free text** — no note, no
+message, no finding text, no path outside the run folder, and no content from
+the object under review.
+
+**The cross-project rollup's fields, in full** (`rounds.jsonl`): `v`,
+`round_key`, `date`, `mode` (the round mode, `plan` or `impl`, and nothing
+else), `wallclock_s`, and the per-lens, per-batch and per-pass count and
+duration objects `lenses[]`, `batches[]`, `passes[]`, then `findings`, `totals`
+and `metrics`. **No field carries free text** here either. It deliberately
+carries **no object name, no absolute clock time and no commit hash**:
+`round_key` is a digest of the run folder's name and `date` is the UTC day the
+round closed. That is de-identification, not anonymization — a name you already
+guessed can be confirmed by hashing it; what it removes is the ability to read
+the list of everything you have ever reviewed off one file.
+
+Token counts come from the completed `Agent` tool result the orchestrator
+already receives. No transcript is read, and the plugin ships no transcript
+reader.
 
 ## Contributing
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 # copy-project.sh — stage-2 copy of the project under review into the
-# scratchpad, for critics to read (design/01 — critics' project copy;
-# design/02 — scratchpad cleanup, for the manifest).
+# scratchpad, for critics to read. It also writes the manifest the
+# scratchpad cleanup script later reads.
 #
 # Three steps, only the first depends on the filesystem:
 #   STEP1-CLONE     whole-tree copy-on-write clone in STRICT mode
@@ -23,16 +23,16 @@
 #
 # Symlinks are copied AS LINKS, never dereferenced: otherwise files that
 # physically live outside the project (a shared key store the project links
-# to) would land in the copy and in the critic's field of view (GD-16).
+# to) would land in the copy and in the critic's field of view.
 #
 # Disclosure minimisation runs on EVERY step, not only when space is short:
 # secret-class files (.env*, *.pem, *.key, id_*, .netrc, credential dirs) are
 # removed from the copy and listed as `EXCLUDED:`.
 #
 # ONE copy per invocation. How many copies a round makes is the orchestrator's
-# call (design/01: one clone per critic when cloning is available, one shared
-# copy otherwise; the number of simultaneous clones equals the agent budget,
-# at most 12) — this script neither counts nor enforces that budget.
+# call — one clone per critic when cloning is available, one shared copy
+# otherwise, with the number of simultaneous clones equal to the agent budget,
+# at most 12 — and this script neither counts nor enforces that budget.
 #
 # Usage:
 #   copy-project.sh --src <project root> --dest <scratchpad run dir>
@@ -42,17 +42,12 @@
 #   --src           absolute path of the project under review (a git work tree)
 #   --dest          absolute path of the scratchpad run directory. NO DEFAULT:
 #                   the scratchpad root is passed in by the orchestrator, an
-#                   environment variable is never the source (design/02, GD-3).
+#                   environment variable is never the source.
 #   --run-id        run identifier written to the manifest; defaults to the
 #                   basename of --dest.
 #
 # Exit: 0 copy made; 2 bad arguments / refused precondition; 3 all steps failed.
 # Stdout: STEP<n>-<NAME>, DURATION-SEC, DF-BEFORE/DF-AFTER, EXCLUDED:, NOTICE:.
-#
-# Provenance note: design/NN-*.md paths, round names (design-r1, skill-md-r1,
-# ...), round-report paths (critic-rounds/<round>/...) and finding ids (GD-#,
-# GC-#, ...) cited here point at the author's private development notes; they
-# are provenance markers, not files shipped with this plugin.
 
 set -u
 
@@ -136,8 +131,8 @@ if [ -e "$DEST_R" ]; then
   fi
 fi
 
-# git is mandatory for the project under review (design/02, open question 4):
-# steps 2 and 3 are defined in terms of the file list git knows.
+# git is mandatory for the project under review: steps 2 and 3 are defined
+# in terms of the file list git knows.
 git -C "$SRC_R" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
   die "--src is not a git work tree: $SRC_R (run 'git init' there first)"
 
@@ -211,7 +206,7 @@ else
 fi
 
 # ------------------------------------------------ secret-class path matching --
-# Common patterns for environment files and local secrets (design/01).
+# Common patterns for environment files and local secrets.
 is_secret_base() { # <basename> -> echoes the matched class, or nothing
   case "$1" in
     .env|.env.*|.envrc)              printf '.env*' ;;
@@ -376,9 +371,8 @@ while IFS= read -r line; do
 done <"$EXCLUDED_LIST"
 
 # ------------------------------------------------------------------ manifest --
-# Format: design/02 — scratchpad cleanup (absolute path, run id, time, list of
-# what was created, volume), field names and JSON shape as fixed by the cleanup
-# script that reads it — `critic-ledger-manifest.json`, mode 0600,
+# Format: absolute path, run id, time, list of what was created and volume,
+# with field names and JSON shape as fixed by the cleanup script that reads it — `critic-ledger-manifest.json`, mode 0600,
 # `manifest_version` "critic-ledger/scratchpad-manifest@1", required fields
 # absolute_path (condition 6), run_id (condition 7), created_at (ISO 8601 WITH
 # a timezone offset), project_root (condition 8), created, size_bytes. The

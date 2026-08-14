@@ -153,7 +153,14 @@ def parse_args(args: list[str]) -> str | tuple[str, list[str], list[str], list[s
         commits.append(a)
         i += 1
     if not commits and not ranges:
-        return "no commits given (positional hashes and/or --range A..B)"
+        msg = "no commits given (positional hashes and/or --range A..B)"
+        if paths:
+            msg += (
+                f" — note: --paths consumed {len(paths)} token(s) "
+                f"({', '.join(paths)}); --paths is greedy, so put commits "
+                f"BEFORE it or end the list with a bare '--'"
+            )
+        return msg
     return repo, commits, ranges, paths
 
 

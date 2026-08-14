@@ -7,6 +7,20 @@
      field below. -->
 
 <!-- Mandatory header fields. Fill every line; delete none. -->
+
+<!-- THE MACHINE COPY IS THE TRACE, NOT THIS FILE. With observability on,
+     the ledger gains exactly three header lines below plus two trailing
+     columns on the verification-passes table — a human-readable summary
+     and nothing more. Every per-span number (assigned and observed model,
+     tokens, wall-clock, agent ids, per-id tags) lives in
+     {run-folder}/trace.jsonl and is read from there by templates/rollup.py;
+     it is never copied back into these cells, and no column is added here
+     to hold it. There is deliberately NO lens table and no token column: a
+     second machine-readable copy of the same facts is a second source of
+     truth, and the one that drifts is always the hand-maintained one. This
+     file measures QUALITY — what was found, what was fixed, what was
+     verified; the trace measures COST. With observability off, nothing
+     here changes except the two words that say so. -->
 - Ledger state: {open | FROZEN (superseded-by-rewrite, date + reason)}.
   Freezing is the ORCHESTRATOR's single header write; rows keep their
   statuses; a frozen ledger is never closable.
@@ -24,10 +38,26 @@
 - Mode: {plan | impl}.
 - Prerequisite (stage 0): git = {yes/no}, commit sanction = {yes/no};
   {normal | DEGRADED} mode.
+- Round-started: {ISO-8601 UTC | n/a} — when stage 1 created this file.
+- Observability: {on | off}. One word, decided at stage 0 from the flag and
+  written here at stage 1(c) with the rest of the header, so that a reader
+  of an old ledger can tell whether the absence of numbers means "off" or
+  "lost". Never left blank.
+- Trace: {trace.jsonl | none (observability off)}.
 - Lenses: {lens → id-prefix → model → timebox, one line per lens; mark a
   lens the owner asked for as `owner-set`; prefixes are letter-led, letters
   and digits only (recount id contract); note a dropped lens here if a
-  respawn failed}.
+  respawn failed; with observability on a lens line may also carry
+  `→ actual {model family}`, the model that was observed rather than the
+  one assigned}. Verifier-prefix stem: {stem | n/a}. Stage 2 fixes ONE stem
+  for the round, under the same id contract as the lens prefixes and
+  distinct from every one of them, and records it here beside them. Pass
+  n's verifier-prefix is that stem followed by the pass ordinal — stem `V`
+  gives `V1`, `V2`, … — and a defect a verifier raises during pass n is a
+  finding like any other: its own row, under `V<n>`. Prefix matching is
+  exact, the recount's own id contract `^{prefix}-\d+$`, so `V1` never
+  absorbs `V12`'s rows and a one-letter stem never absorbs a two-letter
+  lens's.
 - Load-bearing claims of the object (why this many lenses): {one line per
   claim whose falsity would make the object unfit}. The lens count equals
   the length of this list — a count without the list is invalid; `owner-set`
@@ -72,10 +102,12 @@
   the same shape are not part of the round count.
 - Terminal statuses (canonical names — exactly four): `verified-landed` /
   `refuted-with-reason` / `accepted-residue` / `refused-user-signed`. The
-  residue cell must contain the literal `user-signed {date}`.
+  residue cell must contain the literal `user-signed {date}`, where `{date}`
+  is a calendar-valid ISO date (`9999-99-99` is rejected).
   `refused-user-signed` is the owner's REFUSAL to fix a CONFIRMED finding
   (its home is the security/PII class, marked as such at adjudication, never
   retroactively): terminal only with the literal `refused-user-signed {date}`
+  (a calendar-valid ISO date there too)
   in the terminal cell — a bare `refused` stays non-terminal, silence is not
   a signature. "Fixed otherwise than the critic proposed" is NOT a fifth
   status: it lives in the `verified` cell as the literal
@@ -114,8 +146,8 @@
 
 <!-- The carrier of the convergence signal and of the kill criterion. -->
 
-| # | pass (scope) | verdicts (L/P/NOT) | new findings | bundled | second-pass-skipped | notes |
-|---|---|---|---|---|---|---|
+| # | pass (scope) | verdicts (L/P/NOT) | new findings | bundled | second-pass-skipped | notes | started | ended |
+|---|---|---|---|---|---|---|---|---|
 
 New-findings curve by pass: computed by templates/recount.py from the
 table above — quote the script's output here, do not hand-compute.
@@ -130,6 +162,19 @@ preserves PER-ID verdicts, and the switch is recorded in the round delta.
 threshold of 20 findings and the second pass was skipped by default. The
 threshold buys tokens, not correctness: the owner may ask for the pass
 anyway, and from 20 findings up it is mandatory.
+
+`started` / `ended` = the pass's own ISO-8601 UTC timestamps at seconds
+resolution (`2026-08-11T10:16:04Z`), filled only when observability is on.
+They are APPENDED as the last two columns and never inserted: the recount
+finds `new findings` by column name and falls back to cell index 3, so a
+v1 table without these two and a v2 table with them count identically, the
+kill criterion keeps working on both, and an older recount reading a newer
+table simply ignores the extra cells. Omit them entirely for a round that
+ran with observability off — absence is not an error, and the recount then
+says only that there is no time axis. A timestamp that is present but
+unparseable is reported by name with the time axis suppressed; it never
+changes the exit code, because a cost measurement must not be able to fail
+a round on quality.
 
 ## Batch deltas
 

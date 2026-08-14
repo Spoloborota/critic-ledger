@@ -2,8 +2,8 @@
 
 The script turns critic-report finding headers into eight-cell ledger rows,
 either printed (`--stdout`) or inserted into a ledger right after the
-separator of its first findings table. Exit codes: 0 = rows produced,
-2 = structural or usage error and nothing was written.
+separator of its first findings table. Exit codes: 0 = rows produced (help
+is 0 too), 2 = structural or usage error and nothing was written.
 """
 
 from __future__ import annotations
@@ -287,6 +287,15 @@ def test_no_reports_is_a_usage_error(run):
     res = run(SCRIPT, "--stdout")
     assert res.returncode == 2, res.stdout
     assert "Usage:  transcribe.py" in res.stdout
+
+
+@pytest.mark.parametrize("flag", ["-h", "--help"])
+def test_help_flags_print_usage_and_exit_zero(run, report, flag):
+    """Help wins over the report argument and over the output-mode check."""
+    res = run(SCRIPT, report(TWO_FINDINGS), flag)
+    assert res.returncode == 0, res.stdout
+    assert "Usage:  transcribe.py" in res.stdout
+    assert "| GA-1 |" not in res.stdout
 
 
 def test_ledger_flag_without_a_value(run, report):

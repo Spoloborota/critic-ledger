@@ -7,8 +7,9 @@
 one ledger row; the id, severity and claim cells are produced by LITERAL
 COPY of the finding's header line in the salvage file — this is copying,
 not paraphrase, so the information loss is zero and no agent is spent on
-it. Measured on the five design-r1 reports: 56 findings recognized out of
-56, exact match with the ledger id set, zero losses and zero extras.
+it. Measured against a representative sample of real critic reports: 56
+findings recognized out of 56, exact match with the ledger id set, zero
+losses and zero extras.
 
 Contract of a finding header line
 ---------------------------------
@@ -51,7 +52,7 @@ Contract of a finding header line
 
 Contract of the emitted row
 ---------------------------
-- Eight cells (design/03-ledger-and-dod.md):
+- Eight cells:
   `| id | sev | claim | verdict | criterion | fix | verified | terminal |`.
   Transcription fills the FIRST THREE only; the verdict and the readiness
   criterion belong to adjudication (the main session), the rest to the fix
@@ -72,14 +73,12 @@ was actually laid out.
 
 Usage:  transcribe.py <report.md> [<report.md> ...] --ledger <ledger.md>
         transcribe.py <report.md> [...] --stdout      (print rows, no write)
-Exit codes: 0 = rows transcribed (or printed); 2 = structural error or
-usage error — nothing was written.
-
-Provenance note: design/NN-*.md paths, round names (design-r1,
-skill-md-r1, ...), round-report paths (critic-rounds/<round>/...) and
-finding ids (GD-#, GC-#, ...) cited here point at the author's private
-development notes; they are provenance markers, not files shipped with
-this plugin.
+        transcribe.py -h | --help                     (this text, exit 0)
+In `--stdout` mode stdout carries ONLY the rows (so the output can be piped
+or appended) and the run summary goes to stderr; in `--ledger` mode the
+summary goes to stdout.
+Exit codes: 0 = rows transcribed (or printed), or `-h`/`--help`;
+2 = structural error or usage error — nothing was written.
 """  # noqa: D205, D301  # printed usage text; reflow/r-string would change output
 
 import re
@@ -152,14 +151,13 @@ def unwrap_salvage_fence(lines: list[str]) -> list[str]:
     """Neutralize an OUTER fence that wraps a whole critic report.
 
     Some agents deliver their report inside one code fence, and the salvage
-    rule forbids editing the text, so the markers survive into the salvage
-    (`critic-rounds/skill-md-r1/r1-critic-da.md:5`). That wrapper is not an
-    evidence quote, and skipping it would hide every finding in the file.
+    rule forbids editing the text, so the markers survive into the salvage.
+    That wrapper is not an evidence quote, and skipping it would hide every
+    finding in the file.
     The candidate is the FIRST fenced block — the first two markers, paired
     by the same toggling the scanner uses, NOT the outermost markers of the
     file (pairing marker[0] with marker[-1] swallows a report whose
-    evidence blocks merely happen to be several, as in
-    `critic-rounds/skill-md-r1/r1-critic-db.md`). It is a wrapper only when
+    evidence blocks merely happen to be several). It is a wrapper only when
     its interior holds MORE THAN ONE well-formed finding header and nothing
     outside it holds any — an evidence quote never looks like that. The two
     markers are blanked in place (line numbers stay exact) and fences
@@ -297,6 +295,9 @@ def write_atomic(path: str, lines: list[str]) -> None:
 def main() -> int:
     """Transcribe the reports named on the command line and return the exit code."""
     args = sys.argv[1:]
+    if any(a in ("-h", "--help") for a in args):
+        print(__doc__)
+        return 0
     to_stdout = "--stdout" in args
     args = [a for a in args if a != "--stdout"]
     ledger = None

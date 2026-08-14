@@ -16,7 +16,7 @@ Two more rules follow from the same fear:
 
 - The path to delete is NEVER taken from an argument, an environment variable
   or a guess. It comes from a MANIFEST written by whoever created the copy.
-- The manifest is a SECONDARY check, not proof of origin (design/02:126-133):
+- The manifest is a SECONDARY check, not proof of origin:
   the same actor that writes it also calls the cleanup, and such a file can be
   planted anywhere. It catches a MISMATCH — an attempt to remove a directory
   that does not look like the ones we create. The PRIMARY defence is path
@@ -25,8 +25,8 @@ Two more rules follow from the same fear:
 By default the script runs DRY: it prints the plan (each path, the verdict of
 every condition, the file count, the size and the top level of the contents)
 and deletes nothing. Real deletion happens only on a second, explicit call with
-`--confirm`. The confirmation is the orchestrator's, not the owner's
-(design/02:163-172): cleanup is a technical operation inside the scratchpad,
+`--confirm`. The confirmation is the orchestrator's, not the owner's:
+cleanup is a technical operation inside the scratchpad,
 and the two-step shape protects against a WRONG PATH, not against the
 orchestrator. The dry-run output goes into the ledger header.
 
@@ -34,10 +34,10 @@ Any refusal is a RECORD, not a crash: the directory stays where it is and the
 ledger header gets the line "scratchpad not cleaned: reason, path".
 
 
-THE MANIFEST FORMAT (canon: design/02:126-133, field list at design/02:128)
---------------------------------------------------------------------------
+THE MANIFEST FORMAT
+-------------------
 A JSON object, written by the copier INTO the run directory it describes, named
-`critic-ledger-manifest.json`, mode 0600 (design/02:173-176). Required
+`critic-ledger-manifest.json`, mode 0600. Required
 fields:
 
     {
@@ -52,7 +52,7 @@ fields:
 
 - `absolute_path` is the directory to delete — the ONLY source of that path.
   It is kept in the file even though it is a path, because condition 6 needs
-  it; the file itself never leaves the scratchpad (design/02:173-176).
+  it; the file itself never leaves the scratchpad.
 - `run_id` is the run identifier, and by convention also the basename of the
   run directory; condition 7 compares them (or compares against `--run-id`
   when the orchestrator passes it explicitly).
@@ -73,8 +73,8 @@ is tolerated: conditions 1-8 do not depend on where the file lies, except that
 the in-directory case gets one extra identity check under condition 6.
 
 
-THE EIGHT CONDITIONS (design/02:141-153) — a failure of ANY ONE is a refusal
----------------------------------------------------------------------------
+THE EIGHT CONDITIONS — a failure of ANY ONE is a refusal
+--------------------------------------------------------
  1. the path is absolute;
  2. the path contains no `..`;
  3. the path does not change when symbolic links are resolved — i.e. no
@@ -86,15 +86,17 @@ THE EIGHT CONDITIONS (design/02:141-153) — a failure of ANY ONE is a refusal
  7. the run id in the manifest matches the run id;
  8. the resolved path does not start with the resolved root of the checked
     project — compared BY SEGMENTS, after resolving both, never as a substring
-    of a string (finding GD-18).
+    of a string.
 
-Plus, from the same section: a manifest that cannot be read or does not parse
+Plus, on the same footing: a manifest that cannot be read or does not parse
 is a refusal, and the scratchpad root itself must be an absolute path of an
-existing directory, passed as an argument (design/02:136-140) — there is no
-default and the environment is not a source.
+existing directory, passed as an argument — there is no default and the
+environment is not a source.
 
-Substitution between the check and the deletion (finding GD-4, design/02:154):
-the directory is opened ONCE, with O_NOFOLLOW; the identity of the open
+Substitution between the check and the deletion — the directory could be
+swapped for another after it was checked and before it was removed — is
+closed the only way it can be: the directory is opened ONCE, with
+O_NOFOLLOW; the identity of the open
 descriptor is compared against the checked path by (device, inode); every
 removal below it goes through descriptor-relative calls, and the recursion
 never follows a symbolic link.
@@ -109,15 +111,15 @@ INTERFACE
 
     --root                the scratchpad root; required, absolute, existing
                           directory. No default; the environment is not a
-                          source (design/02:136-140).
+                          source.
     --manifest            act on this one manifest. Without it the script
                           discovers every `critic-ledger-manifest.json`
                           under the root.
     --older-than-hours N  only manifests older than N hours (age from
                           `created_at`, not from mtime) — the interrupted-round
                           branch: cleanup runs at the next start of the skill
-                          in the same project, over manifests older than a day
-                          (design/02:170-172, so N=24).
+                          in the same project, over manifests older than a
+                          day, so N=24.
     --run-id              the run id condition 7 must match. Default: the
                           basename of the directory the manifest describes.
     --project-root        the checked project's root for condition 8. Default:
@@ -128,11 +130,6 @@ INTERFACE
 Exit code: 0 only when there were no refusals (deleted and already-absent
 entries are both fine); 1 when at least one manifest was refused; 2 on a usage
 error (a bad root, an unreadable `--manifest` argument).
-
-Provenance note: design/NN-*.md paths, round names (design-r1, skill-md-r1,
-...), round-report paths (critic-rounds/<round>/...) and finding ids (GD-#,
-GC-#, ...) cited here point at the author's private development notes; they are
-provenance markers, not files shipped with this plugin.
 """  # noqa: D205  # module docstring wording is frozen verbatim
 
 import argparse
@@ -178,7 +175,7 @@ def is_inside(child: str, parent: str) -> bool:
 
     Both are expected to be already resolved. Segment comparison, never a
     substring test: '/tmp/scratch-evil' must NOT count as inside
-    '/tmp/scratch' (finding GD-18).
+    '/tmp/scratch'.
     """
     c, p = segments(child), segments(parent)
     return len(c) > len(p) and c[: len(p)] == p
@@ -615,7 +612,13 @@ class Purge:
                 fds.append(self.open_sub(part, fds[-1]))
             os.unlink(parts[-1], dir_fd=fds[-1])
             self.files += 1
-            for i in range(len(parts) - 2, -1, -1):
+            # Unreachable in the shipped flow: condition 6 (:477-484) refuses a
+            # manifest nested deeper than the directory it describes, so
+            # `keep_rel` always has exactly one segment and this loop never
+            # runs. Kept deliberately — `Purge` is a general descriptor-relative
+            # remover, and a future relaxation of condition 6 would otherwise
+            # leave the intermediate directories behind silently.
+            for i in range(len(parts) - 2, -1, -1):  # pragma: no cover
                 os.rmdir(parts[i], dir_fd=fds[i])
                 self.dirs += 1
         finally:
@@ -779,7 +782,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
-    # --- the root is checked by the script itself (design/02:136-140) ---
+    # --- the root is checked by the script itself ---
     root = args.root
     if not os.path.isabs(root):  # noqa: PTH117  # os.path by design
         print(
@@ -843,7 +846,7 @@ def main(argv: list[str] | None = None) -> int:
                 unit.reason = (
                     f"age {age_h:.2f} h (created_at "
                     f"{unit.data['created_at']}) is below the "
-                    f"--older-than-hours {args.older_than_hours} "
+                    f"--older-than-hours {args.older_than_hours:g} "
                     f"threshold"
                 )
                 skipped += 1
@@ -883,8 +886,7 @@ def main(argv: list[str] | None = None) -> int:
                 "but absent on disk: " + ", ".join(map(str, leftovers)),
             )
         if (
-            unit.data.get("size_bytes")
-            and size
+            unit.data.get("size_bytes") is not None
             and abs(unit.data["size_bytes"] - size) > max(size, 1) * 0.5
         ):
             unit.notes.append(

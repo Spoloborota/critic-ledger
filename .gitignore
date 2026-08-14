@@ -1,6 +1,12 @@
 # OS and editor noise
 .DS_Store
 
+# macOS conflict-copy artifacts (e.g. from cloud-sync tools), which can
+# silently leave duplicates alongside a renamed file.
+*\ (1).*
+*\ (2).*
+*\ conflicted\ copy*
+
 # Python bytecode and tool caches — CONTRIBUTING invites running the suites
 # and linters, and none of their residue belongs in history
 __pycache__/
