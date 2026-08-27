@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+## [0.2.1] - 2026-08-27
+
+- **The Dependabot configuration no longer ships in the published tree.**
+  Dependency-upgrade pull requests are raised in the development repository
+  instead.
+- **Comments in the CI workflow were reworded** to describe the current
+  release process.
 
 ## [0.2.0] - 2026-08-11
 

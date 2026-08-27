@@ -161,7 +161,7 @@ hasnt 'pass wall-clock'
 # — a shallow clone, an export outside git — the case is SKIPPED out loud and
 # never counted as a pass.
 ref=${PREV_RECOUNT_REF:-$(git describe --tags --abbrev=0 2>/dev/null || true)}
-if [ -n "$ref" ] && git show "$ref:skills/critic-ledger/templates/recount.py" > "$T/old-recount.py" 2>/dev/null; then
+if [ -n "$ref" ] && git show "$ref:./skills/critic-ledger/templates/recount.py" > "$T/old-recount.py" 2>/dev/null; then
   out=$(python3 "$T/old-recount.py" "$T/c33-v2-for-old-recount.md" 2>&1); got=$?
   ok=ok; [ "$got" = 0 ] || { ok=FAIL; fail=1; }
   printf '%-28s want=0 got=%s %s (ref %s)\n' "c33-old-recount" "$got" "$ok" "$ref"

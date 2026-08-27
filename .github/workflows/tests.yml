@@ -19,18 +19,19 @@
 #   line the scripts support (floor 3.11 through current stable 3.14).
 # - a shell-lint job: shellcheck over the two SHIPPED shell scripts, named
 #   explicitly in the job below — tests/run-regression.sh and
-#   skills/critic-ledger/templates/copy-project.sh. (The development tree
-#   also holds tools/release.sh and per-round check scripts; none of them
-#   ship, so none are linted here.) `shfmt` is deliberately NOT run: its style
-#   disagrees with these files' hand-aligned layout on hundreds of lines, and
-#   reformatting them is a change to shipped artifacts, not a lint fix;
+#   skills/critic-ledger/templates/copy-project.sh. (The shipped shell scripts
+#   are named explicitly because a development checkout may contain others.)
+#   `shfmt` is deliberately NOT run: its style disagrees with these files'
+#   hand-aligned layout on hundreds of lines, and reformatting them is a change
+#   to shipped artifacts, not a lint fix;
 # - a workflow-audit job: zizmor over this file, so the hardening below
 #   (SHA pins, least-privilege permissions) cannot silently regress;
 # - a link-check job: lychee over the published Markdown.
 #
 # Supply-chain policy: every `uses:` is pinned to a full commit SHA with the
 # release tag in a trailing comment; a moving tag is a mutable dependency.
-# Dependabot (.github/dependabot.yml) opens the upgrade pull requests.
+# Dependabot config lives in the development repository, not here: upgrade
+# pull requests land there and reach this workflow only through a release.
 # The workflow needs nothing but read access to its own contents, and says so
 # at the top level; no job widens it.
 name: tests
@@ -122,11 +123,11 @@ jobs:
   # Both SHIPPED shell scripts — the two named in the shellcheck step below —
   # declare `#!/bin/sh` and are written to POSIX sh, so both are checked in that
   # dialect explicitly rather than by shebang sniffing. The list is written out
-  # rather than globbed: `*.sh` in a development checkout also matches
-  # tools/release.sh and the per-round check scripts, which are excluded from
-  # releases. There is no `shfmt` step: shfmt's house style disagrees with the
-  # hand-aligned layout of these files across hundreds of lines, and
-  # reformatting a shipped script is a change to the artifact, not a lint fix.
+  # rather than globbed: the shipped shell scripts are named explicitly because
+  # a development checkout may contain others. There is no `shfmt` step: shfmt's
+  # house style disagrees with the hand-aligned layout of these files across
+  # hundreds of lines, and reformatting a shipped script is a change to the
+  # artifact, not a lint fix.
   shell-lint:
     runs-on: ubuntu-latest
     steps:
@@ -195,8 +196,7 @@ jobs:
         run: |
           pip install zizmor==1.29.0
           zizmor .github/workflows/
-  # Link check over the published Markdown only — the private working notes in
-  # the repository root and .roadmap/ are not part of what readers follow.
+  # Link check covers the published Markdown listed below.
   links:
     runs-on: ubuntu-latest
     steps:
