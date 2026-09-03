@@ -14,9 +14,11 @@ Exit codes: 0 = closable (help is 0 too), 1 = open rows remain,
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
-from conftest import HEADER_7, HEADER_8
+from conftest import HEADER_7, HEADER_8, HEADER_9, write_ledger
 
 SCRIPT = "recount.py"
 
@@ -133,7 +135,8 @@ def test_header_of_an_unsupported_width_is_structural(run, ledger):
     res = run(SCRIPT, ledger(row, header=header))
     assert res.returncode == 2, res.stdout
     assert ("line 1: findings header has 6 cells; the table must be 7-cell "
-            "(legacy) or 8-cell (with criterion)" in res.stdout)
+            "(v1, legacy), 8-cell (v2, with criterion) or 9-cell (v3, with "
+            "zone)" in res.stdout)
 
 
 def test_degenerate_one_cell_header_is_structural(run, ledger):
@@ -147,7 +150,8 @@ def test_degenerate_one_cell_header_is_structural(run, ledger):
     res = run(SCRIPT, ledger("| DA-1 |", header="| id |\n|---|\n"))
     assert res.returncode == 2, res.stdout
     assert ("line 1: findings header has 1 cells; the table must be 7-cell "
-            "(legacy) or 8-cell (with criterion)" in res.stdout)
+            "(v1, legacy), 8-cell (v2, with criterion) or 9-cell (v3, with "
+            "zone)" in res.stdout)
     assert res.stderr == ""
     assert "rows:" not in res.stdout
 
@@ -179,8 +183,51 @@ def test_too_narrow_headers_are_structural_without_a_traceback(
 def test_malformed_id_is_structural(run, ledger):
     res = run(SCRIPT, ledger("| 1A-3 | major | c | v | crit | f | LANDED | verified-landed |"))
     assert res.returncode == 2, res.stdout
-    assert ("first cell is not a valid id (<Prefix>-<n>, letter-led): '1A-3'"
+    assert ("first cell is not a valid id (<Prefix>-<n>, every prefix segment "
+            "letter-led, dash-joined segments allowed as in `V-CIT-1`): '1A-3'"
             in res.stdout)
+
+
+# --- the id contract: composite prefixes ------------------------------------
+#
+# A verifier that carries the lens it re-checked inside its own ids
+# (`V-CIT-1`) used to fail the recount on the second dash and cost the round
+# a run plus a rename. The prefix is one or more dash-joined letter-led
+# segments; the number is still the tail, and an empty segment is still an
+# error.
+
+
+@pytest.mark.parametrize("row_id", ["V-CIT-1", "DA-1", "L1-12", "V-CIT-DUP-3"])
+def test_a_composite_prefix_is_a_valid_id(run, ledger, row_id):
+    row = f"| {row_id} | major | c | v | crit | f | LANDED | verified-landed |"
+    res = run(SCRIPT, ledger(row))
+    assert res.returncode == 0, res.stdout
+    assert "rows: 1 | terminal: 1 | non-terminal: 0" in res.stdout
+
+
+@pytest.mark.parametrize("row_id", ["-1", "V--1", "1-V", "V-CIT-", "V-CIT",
+                                    "V-1-2", "V-", "-V-1"])
+def test_a_broken_composite_id_is_still_structural(run, ledger, row_id):
+    row = f"| {row_id} | major | c | v | crit | f | LANDED | verified-landed |"
+    res = run(SCRIPT, ledger(row))
+    assert res.returncode == 2, res.stdout
+    assert "first cell is not a valid id" in res.stdout
+    assert repr(row_id) in res.stdout
+
+
+def test_a_composite_id_belongs_to_its_whole_prefix(run, ledger):
+    """`V-CIT-1`'s prefix is `V-CIT`, never the leading `V`.
+
+    The security-lens backstop matches a row to a lens by everything before
+    the final `-<n>`, so a composite verifier id is NOT charged to a lens
+    that happens to share its first segment.
+    """
+    rows = ("| V-CIT-1 | major | c | v | crit | f | LANDED | verified-landed |\n"
+            "| V-2 | major | c | class:security-pii | crit | f | LANDED |"
+            " verified-landed |")
+    res = run(SCRIPT, ledger(rows, preamble="- Security lens: V\n\n"))
+    assert res.returncode == 0, res.stdout
+    assert "rows: 2 | terminal: 2 | non-terminal: 0" in res.stdout
 
 
 # --- terminal literals -----------------------------------------------------
@@ -272,6 +319,25 @@ def test_frozen_wins_over_structural_errors(run, ledger):
     broken = "| DA-1 | major | too | few | cells |"
     res = run(SCRIPT, ledger(broken, preamble="Ledger state: FROZEN\n"))
     assert res.returncode == 3, res.stdout
+
+
+@pytest.mark.parametrize("marker", [
+    "- Ledger state: closed 2026-01-15\n",
+    "Ledger state: CLOSED 2026-01-15\n",
+])
+def test_a_closed_header_is_not_a_frozen_one(run, ledger, marker):
+    """Stage 9's third header value passes the frozen branch untouched.
+
+    The branch matches the substring `frozen`; `closed` does not contain
+    it, which is why stage 9 can write `Ledger state: closed <ISO-date>`
+    with no change to this script. A closed ledger must therefore recount
+    exactly as an open one does — the shell suite's c76 pins the same fact
+    end to end.
+    """
+    res = run(SCRIPT, ledger(CLOSED, preamble=marker))
+    assert res.returncode == 0, res.stdout
+    assert "ROUND CLOSABLE: zero non-terminal rows." in res.stdout
+    assert "FROZEN" not in res.stdout
 
 
 # --- the new-findings curve ------------------------------------------------
@@ -457,7 +523,7 @@ def test_v2_passes_table_prints_the_time_indexed_curve(run, ledger):
 
 
 def test_malformed_ended_is_named_and_the_axis_suppressed(run, ledger):
-    """Amendment 13 (user-signed 2026-08-10): named, suppressed, exit AS-IS.
+    """Malformed 'ended': named in output, time axis suppressed, exit AS-IS.
 
     The two columns exist only because observability is on, so a defect in
     them may not create a failure path the flag alone would introduce.
@@ -687,3 +753,1996 @@ def test_eight_cell_current_against_seven_cell_previous(run, ledger):
     res = run(SCRIPT, cur, "--prev", prev)
     assert res.returncode == 0, res.stdout
     assert "newly-terminal ['DA-1']" in res.stdout
+
+
+# --- verdict-cell tags: class recurrences and the injection rate ------------
+#
+# Two optional tags live inside the free-prose `verdict` cell, each with a
+# fixed boundary so it can be lifted back out: `class:<slug>` (the defect
+# class) and `origin:fix-application from:<batch>` (a finding that is itself
+# a defect in applying an earlier fix, plus the batch whose fix it was). The
+# compatibility claim these tests protect is the first one below: a ledger
+# that carries neither tag prints neither report.
+
+def tagged(rid: str, verdict: str, *, fix: str = "aa11", sev: str = "major",
+           criterion: str = "L2 crit", verified: str = "LANDED",
+           terminal: str = "verified-landed") -> str:
+    """One findings row, addressed by the cells these tests vary."""
+    return (f"| {rid} | {sev} | claim | {verdict} | {criterion} | {fix} | "
+            f"{verified} | {terminal} |")
+
+
+def test_an_untagged_ledger_prints_neither_new_report(run, ledger):
+    """The compatibility claim: no tag, no new line, exactly as before."""
+    res = run(SCRIPT, ledger(CLOSED + "\n" + OPEN))
+    assert res.returncode == 1, res.stdout
+    assert "class recurrences" not in res.stdout
+    assert "injection rate" not in res.stdout
+    assert "CLASS-KILL DUE" not in res.stdout
+
+
+def test_two_upheld_rows_of_one_class_print_class_kill_due(run, ledger):
+    rows = "\n".join([tagged("DA-1", "upheld, class:line-rot"),
+                      tagged("DA-2", "upheld, class:line-rot")])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert ("class recurrences (upheld rows per class tag): line-rot 2"
+            in res.stdout)
+    assert "CLASS-KILL DUE: line-rot (2 upheld: DA-1, DA-2)" in res.stdout
+
+
+def test_the_class_kill_warning_names_the_trigger_as_ours(run, ledger):
+    """The "second recurrence" number is ours, and the output says so."""
+    rows = "\n".join([tagged("DA-1", "upheld, class:line-rot"),
+                      tagged("DA-2", "upheld, class:line-rot")])
+    res = run(SCRIPT, ledger(rows))
+    assert "The 2nd-recurrence trigger is OURS" in res.stdout
+    assert "no standard supplies it" in res.stdout
+
+
+def test_one_row_of_a_class_is_counted_but_raises_no_warning(run, ledger):
+    rows = "\n".join([tagged("DA-1", "upheld, class:line-rot"),
+                      tagged("DA-2", "upheld, class:pipe-in-cell")])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert ("class recurrences (upheld rows per class tag): line-rot 1 | "
+            "pipe-in-cell 1" in res.stdout)
+    assert "CLASS-KILL DUE" not in res.stdout
+
+
+def test_a_refuted_row_does_not_count_toward_its_class(run, ledger):
+    """A refuted claim is not a recurrence of anything."""
+    rows = "\n".join([
+        tagged("DA-1", "upheld, class:line-rot"),
+        tagged("DA-2", "refuted, class:line-rot", criterion="—",
+               verified="n/a", terminal="refuted-with-reason"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert ("class recurrences (upheld rows per class tag): line-rot 1"
+            in res.stdout)
+    assert "CLASS-KILL DUE" not in res.stdout
+
+
+def test_one_row_naming_the_same_class_twice_is_one_row(run, ledger):
+    rows = tagged("DA-1", "upheld, class:line-rot (again class:line-rot)")
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert ("class recurrences (upheld rows per class tag): line-rot 1"
+            in res.stdout)
+
+
+def test_class_grouping_is_by_exact_slug(run, ledger):
+    """Nothing is normalized: two literals are two classes."""
+    rows = "\n".join([tagged("DA-1", "upheld, class:line-rot"),
+                      tagged("DA-2", "upheld, class:linerot")])
+    res = run(SCRIPT, ledger(rows))
+    assert "line-rot 1 | linerot 1" in res.stdout
+    assert "CLASS-KILL DUE" not in res.stdout
+
+
+@pytest.mark.parametrize("slug", ["Foo", "Line-Rot", ".x", "/x", "a" * 33])
+def test_a_class_tag_outside_the_alphabet_is_a_structural_error(
+        run, ledger, slug):
+    """Fail-closed: the boundary is never guessed, exit 2 names the row.
+
+    These are the cases in which a slug is ATTEMPTED and none is readable
+    — the first character after the literal is outside the alphabet
+    (without being whitespace), or the run of alphabet characters never
+    ends within 32.
+    """
+    res = run(SCRIPT, ledger(tagged("DA-1", f"upheld, class:{slug}")))
+    assert res.returncode == 2, res.stdout
+    assert "STRUCTURAL ERRORS" in res.stdout
+    assert "DA-1 carries a `class:` tag" in res.stdout
+
+
+@pytest.mark.parametrize("verdict", [
+    "upheld [class: count-citation-off]",          # the pre-tag hand convention
+    "refuted; it never belonged to the security class:",  # end of the cell
+    "upheld, marked class: and left at that",
+    r"upheld (class:\| pipe next)",
+])
+def test_a_class_colon_written_as_prose_is_not_a_tag(run, ledger, verdict):
+    """`class:` followed by whitespace, a `|` or the end of the cell is
+    English prose, not a botched tag: no error, no group, nothing printed.
+
+    Compatibility outranks the widest reading of the fail-closed rule
+    here. Ledgers closed before this tag existed carry exactly these two
+    shapes in their verdict cells, and an old ledger must recount as it
+    did in 0.2.0. Nothing readable is lost: a tag never attaches its slug
+    across whitespace.
+    """
+    res = run(SCRIPT, ledger(tagged("DA-1", verdict)))
+    assert res.returncode == 0, res.stdout
+    assert "STRUCTURAL ERRORS" not in res.stdout
+    assert "class recurrences" not in res.stdout
+    assert "CLASS-KILL DUE" not in res.stdout
+
+
+def test_a_prose_class_colon_leaves_the_output_byte_identical(run, ledger):
+    """The compatibility claim in its strongest form: adding the pre-tag
+    hand convention to a verdict cell changes nothing that is printed.
+    """
+    plain = run(SCRIPT, ledger(tagged("DA-1", "upheld"), name="plain.md"))
+    prose = run(SCRIPT, ledger(tagged("DA-1", "upheld [class: count-citation-off]"),
+                               name="prose.md"))
+    assert plain.returncode == prose.returncode == 0, prose.stdout
+    assert plain.stdout == prose.stdout
+
+
+@pytest.mark.parametrize("written", ["line_rot", "line.rot", "line/rot",
+                                     "line rot"])
+def test_a_class_slug_ends_at_the_first_character_outside_the_alphabet(
+        run, ledger, written):
+    """`class:line_rot` is the slug `line`: `_`, `.`, `/` and a space are
+    TERMINATORS, not slug characters, so what follows one is prose. Pinned
+    because the trailing text is dropped silently — the tag is readable, so
+    nothing here is a structural error.
+    """
+    res = run(SCRIPT, ledger(tagged("DA-1", f"upheld, class:{written}")))
+    assert res.returncode == 0, res.stdout
+    assert ("class recurrences (upheld rows per class tag): line 1"
+            in res.stdout)
+
+
+def test_class_tags_are_read_on_a_seven_cell_legacy_ledger(run, ledger):
+    """The verdict cell is index 3 in both schemas — no branch is needed."""
+    rows = "\n".join([
+        "| DA-1 | major | c | upheld, class:line-rot | f | LANDED | "
+        "verified-landed |",
+        "| DA-2 | major | c | upheld, class:line-rot | f | LANDED | "
+        "verified-landed |",
+    ])
+    res = run(SCRIPT, ledger(rows, header=HEADER_7))
+    assert res.returncode == 0, res.stdout
+    assert "CLASS-KILL DUE: line-rot (2 upheld: DA-1, DA-2)" in res.stdout
+
+
+def test_the_class_kill_warning_does_not_change_the_exit_code(run, ledger):
+    rows = "\n".join([
+        tagged("DA-1", "upheld, class:line-rot"),
+        tagged("DA-2", "upheld, class:line-rot"),
+        tagged("DA-3", "upheld", criterion="", verified="x", terminal="open"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 1, res.stdout
+    assert "CLASS-KILL DUE: line-rot" in res.stdout
+    assert "non-terminal ids: DA-3" in res.stdout
+
+
+# --- the defect class / signature mode split -------------------------------
+# The security-lens backstop obliges EVERY row of the declared lens to carry
+# `class:security-pii`, so the slug on such a row says which lens raised the
+# finding — a signature mode — and not that a defect class recurred. Two of
+# them used to produce `CLASS-KILL DUE: security-pii` with no recurring class
+# anywhere. The default counts toward no kill; the adjudicator who means the
+# class writes it, and then it counts exactly as any other class does.
+
+SECURITY_HEADER = "- Security lens: SE\n"
+
+
+def test_the_lens_default_security_class_raises_no_class_kill(run, ledger):
+    """Two rows carrying only the BACKSTOP's default: census, no kill.
+
+    The census line still counts both tags — it is a tag census and says so
+    — while the kill count is zero, and the gap is named on its own line
+    rather than left for a reader to derive.
+    """
+    rows = "\n".join([tagged("SE-1", "upheld class:security-pii"),
+                      tagged("SE-2", "upheld class:security-pii")])
+    res = run(SCRIPT, ledger(rows, preamble=SECURITY_HEADER))
+    assert res.returncode == 0, res.stdout
+    assert ("class recurrences (upheld rows per class tag): security-pii 2"
+            in res.stdout)
+    assert "CLASS-KILL DUE" not in res.stdout
+    assert "class-kill count for security-pii: 0 of 2 upheld rows" in res.stdout
+    assert "signature mode and not a defect class" in res.stdout
+
+
+def test_an_explicitly_adjudicated_security_class_still_kills(run, ledger):
+    """The written origin restores the count, and nothing else does.
+
+    `class-origin:adjudicator` in the same cell is the adjudicator saying
+    the class is their own call rather than the lens's default, so the two
+    rows are a recurrence and `CLASS-KILL DUE` prints exactly as it does
+    for any other slug.
+    """
+    verdict = "upheld class:security-pii class-origin:adjudicator"
+    rows = "\n".join([tagged("SE-1", verdict), tagged("SE-2", verdict)])
+    res = run(SCRIPT, ledger(rows, preamble=SECURITY_HEADER))
+    assert res.returncode == 0, res.stdout
+    assert "CLASS-KILL DUE: security-pii (2 upheld: SE-1, SE-2)" in res.stdout
+    assert "class-kill count for security-pii" not in res.stdout
+
+
+def test_the_security_class_counts_where_no_lens_default_could_set_it(
+        run, ledger):
+    """No declared security lens, no backstop, so nothing set the class but
+    the adjudicator: the slug counts as it always did.
+    """
+    rows = "\n".join([tagged("DA-1", "upheld class:security-pii"),
+                      tagged("DA-2", "upheld class:security-pii")])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert "CLASS-KILL DUE: security-pii (2 upheld: DA-1, DA-2)" in res.stdout
+
+
+def test_another_lens_row_carrying_the_security_class_counts(run, ledger):
+    """The exemption is the DECLARED lens's own rows and nothing wider.
+
+    A row of another prefix was never obliged to carry the class, so its
+    tag is a judgment and enters the kill count — one of the two rows here
+    is the lens's default and the other is not, which leaves the count at
+    one and the warning unprinted.
+    """
+    rows = "\n".join([tagged("SE-1", "upheld class:security-pii"),
+                      tagged("DA-1", "upheld class:security-pii")])
+    res = run(SCRIPT, ledger(rows, preamble=SECURITY_HEADER))
+    assert res.returncode == 0, res.stdout
+    assert "class-kill count for security-pii: 1 of 2 upheld rows" in res.stdout
+    assert "CLASS-KILL DUE" not in res.stdout
+
+
+# --- the open class-kill row -----------------------------------------------
+
+def test_an_open_class_kill_row_prints_kill_in_flight(run, ledger):
+    """The warning speaks of "no kill in flight"; the kill that IS in flight
+    is now printed with its slug and its id, and the exit code is untouched.
+
+    The comparison fixture is the same ledger with the tag removed: the
+    literal appears in one and not the other, and both exit the same way.
+    """
+    base = [tagged("DA-1", "upheld, class:line-rot"),
+            tagged("DA-2", "upheld, class:line-rot")]
+    gate = tagged("K-1", "the gate for class-kill:line-rot",
+                  criterion="grep -c raw-date = 0", verified="x",
+                  terminal="open")
+    plain = tagged("K-1", "the gate for this class",
+                   criterion="grep -c raw-date = 0", verified="x",
+                   terminal="open")
+    res = run(SCRIPT, ledger("\n".join([*base, gate]), name="in-flight.md"))
+    assert res.returncode == 1, res.stdout
+    assert "kill in flight: line-rot (K-1)" in res.stdout
+    assert re.search(r"kill in flight: [a-z0-9-]+ \(", res.stdout), res.stdout
+    assert "CLASS-KILL DUE: line-rot" in res.stdout
+    before = run(SCRIPT, ledger("\n".join([*base, plain]), name="no-tag.md"))
+    assert before.returncode == res.returncode, before.stdout
+    assert "kill in flight:" not in before.stdout
+
+
+def test_a_terminal_class_kill_row_is_not_in_flight(run, ledger):
+    """The gate landed: the row is terminal and nothing is in flight."""
+    rows = "\n".join([
+        tagged("DA-1", "upheld, class:line-rot"),
+        tagged("DA-2", "upheld, class:line-rot"),
+        tagged("K-1", "the gate for class-kill:line-rot"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert "kill in flight:" not in res.stdout
+
+
+# --- injection rate --------------------------------------------------------
+
+def test_the_injection_rate_is_printed_per_batch(run, ledger):
+    """Denominator = rows carrying the batch id in `fix`; numerator =
+    `from:<batch>` inside an `origin:fix-application` tag.
+    """
+    rows = "\n".join([
+        tagged("DA-1", "upheld", fix="aa11"),
+        tagged("DA-2", "upheld", fix="aa11"),
+        tagged("V1-1", "upheld, origin:fix-application from:aa11", fix="bb22"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert "  aa11: 1/2 = 50.0%" in res.stdout
+    assert "  bb22: 0/1 = 0.0%" in res.stdout
+
+
+def test_the_reference_points_are_marked_as_literature(run, ledger):
+    rows = tagged("V1-1", "upheld, origin:fix-application from:aa11")
+    res = run(SCRIPT, ledger(rows))
+    assert ("7% and 3.5% are LITERATURE reference points — undisciplined "
+            "and disciplined floor — not our measurement" in res.stdout)
+
+
+def test_two_consecutive_high_batches_recommend_stopping_the_batching(
+        run, ledger):
+    rows = "\n".join([
+        tagged("DA-1", "upheld", fix="aa11"),
+        tagged("DA-2", "upheld", fix="aa11"),
+        tagged("V1-1", "upheld, origin:fix-application from:aa11", fix="bb22"),
+        tagged("V1-2", "upheld", fix="bb22"),
+        tagged("V2-1", "upheld, origin:fix-application from:bb22", fix="cc33"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert "INJECTION RATE HIGH: bb22, 50.0%" in res.stdout
+    assert "recommend stopping the batching and forking to the user" in res.stdout
+    assert "this metric never stops the round by itself" in res.stdout
+
+
+def test_the_injection_flag_needs_two_consecutive_batches(run, ledger):
+    """One high batch followed by a clean one raises nothing."""
+    rows = "\n".join([
+        tagged("DA-1", "upheld", fix="aa11"),
+        tagged("V1-1", "upheld, origin:fix-application from:aa11", fix="bb22"),
+        tagged("V1-2", "upheld", fix="bb22"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert "  aa11: 1/1 = 100.0%" in res.stdout
+    assert "  bb22: 0/2 = 0.0%" in res.stdout
+    assert "INJECTION RATE HIGH" not in res.stdout
+
+
+def test_a_batch_below_seven_percent_raises_nothing(run, ledger):
+    rows = "\n".join(
+        [tagged(f"DA-{n}", "upheld", fix="aa11") for n in range(1, 21)]
+        + [tagged("V1-1", "upheld, origin:fix-application from:aa11",
+                  fix="bb22")],
+    )
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert "  aa11: 1/20 = 5.0%" in res.stdout
+    assert "INJECTION RATE HIGH" not in res.stdout
+
+
+def test_the_injection_flag_does_not_borrow_the_class_kill_literal(
+        run, ledger):
+    """One literal, one weight of compulsion: the injection threshold never
+    prints CLASS-KILL DUE.
+    """
+    rows = "\n".join([
+        tagged("DA-1", "upheld", fix="aa11"),
+        tagged("V1-1", "upheld, origin:fix-application from:aa11", fix="bb22"),
+        tagged("V2-1", "upheld, origin:fix-application from:bb22", fix="cc33"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert "INJECTION RATE HIGH" in res.stdout
+    assert "CLASS-KILL DUE" not in res.stdout
+
+
+def test_a_tagged_row_without_a_readable_from_is_unattributed(run, ledger):
+    """It is listed, never charged to the latest batch by guess."""
+    rows = "\n".join([
+        tagged("DA-1", "upheld", fix="aa11"),
+        tagged("V1-1", "upheld, origin:fix-application", fix="aa11"),
+        tagged("V1-2", "upheld, origin:fix-application from:UPPER", fix="aa11"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert "INJECTION UNATTRIBUTED: V1-1, V1-2" in res.stdout
+    assert "  aa11: 0/3 = 0.0%" in res.stdout
+
+
+def test_a_row_fixed_by_no_identifiable_batch_gets_n_a(run, ledger):
+    rows = "\n".join([
+        tagged("DA-1", "upheld", fix=" "),
+        tagged("V1-1", "upheld, origin:fix-application from:aa11", fix="aa11"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert "injection rate: n/a (batch not identifiable) for DA-1" in res.stdout
+
+
+def test_a_refuted_row_is_not_reported_as_an_unidentifiable_batch(
+        run, ledger):
+    """A refuted row was never fixed; it belongs to no batch at all."""
+    rows = "\n".join([
+        tagged("DA-1", "refuted", criterion="—", fix="—", verified="n/a",
+               terminal="refuted-with-reason"),
+        tagged("V1-1", "upheld, origin:fix-application from:aa11", fix="aa11"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert "batch not identifiable" not in res.stdout
+
+
+def test_a_from_reference_naming_no_batch_is_reported(run, ledger):
+    """Attribution to a batch the fix column does not know is visible, not
+    silently dropped from the metric.
+    """
+    rows = "\n".join([
+        tagged("DA-1", "upheld", fix="aa11"),
+        tagged("V1-1", "upheld, origin:fix-application from:zz99", fix="aa11"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert ("injection: no batch in the fix column is named by from:zz99"
+            in res.stdout)
+
+
+def test_the_injection_report_does_not_change_the_exit_code(run, ledger):
+    rows = "\n".join([
+        tagged("DA-1", "upheld", fix="aa11"),
+        tagged("V1-1", "upheld, origin:fix-application from:aa11", fix="aa11"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert res.stdout.rstrip().endswith("ROUND CLOSABLE: zero non-terminal rows.")
+
+
+# --- residue: the two named waits and the durable register ------------------
+#
+# A residue NOMINEE is not an open row and not a terminal one: it waits in a
+# NAMED non-terminal state until the owner ratifies it. The exit contract
+# therefore has four buckets and still two codes, and the register that holds
+# what was accepted lives outside the run folder, so it outlives it. The
+# compatibility claim these tests protect is the last one below: a ledger with
+# neither a register nor a nomination prints not one new line.
+
+NOMINEE = (
+    "| DA-2 | minor | claim | verdict | crit | fix | x | "
+    "awaiting-signature (nominated 2026-08-29) |"
+)
+RATIFIED = (
+    "| DA-2 | minor | claim | verdict | crit | fix | x | "
+    "accepted-residue user-signed 2026-08-29 |"
+)
+NO_ACTION = (
+    "| DA-3 | minor | claim | verdict | crit | fix | x | "
+    "awaiting-logged-no-action |"
+)
+# An open row whose id collides with neither of the two waiting rows above.
+OPEN_TOO = "| DA-4 | major | claim | verdict |  | fix | x | open |"
+REG_HEADER = (
+    "| run-qualified id | severity | claim-hook | rationale | "
+    "compensating-control | review-by | status | origin-run |\n"
+    "|---|---|---|---|---|---|---|---|\n"
+)
+
+
+def reg_row(rid: str = "run1/DA-2", sev: str = "minor", hook: str = "hook",
+            rationale: str = "argued when it was made",
+            control: str = "a leak gate stays red",
+            review_by: str = "2099-01-01",
+            status: str = "nominated 2099-01-01",
+            origin: str = "run1") -> str:
+    """One register row, addressed by the cells these tests vary."""
+    return (f"| {rid} | {sev} | {hook} | {rationale} | {control} | "
+            f"{review_by} | {status} | {origin} |")
+
+
+def register(tmp_path, *rows: str, header: str = REG_HEADER,
+             name: str = "residue-register.md"):
+    """Write a residue register into tmp_path and return its path."""
+    path = tmp_path / name
+    body = "\n".join(rows) + "\n" if rows else ""
+    path.write_text("# Residue register\n\n" + header + body, encoding="utf-8")
+    return path
+
+
+def run_ledger(tmp_path, rows: str, *, run: str = "run1"):
+    """Write a ledger at the layout address the register is derived from."""
+    folder = tmp_path / ".critic-ledger" / run
+    folder.mkdir(parents=True, exist_ok=True)
+    return write_ledger(folder / "fix-ledger.md", rows)
+
+
+# --- the named waits and the four exit buckets ------------------------------
+
+
+def test_a_nomination_is_a_named_wait_not_an_open_row(run, ledger):
+    """The DoD case: no open row, one nominee -> awaiting ratification, exit 1."""
+    res = run(SCRIPT, ledger(CLOSED + "\n" + NOMINEE))
+    assert res.returncode == 1, res.stdout
+    assert "awaiting-signature ids: DA-2" in res.stdout
+    assert ("ROUND AWAITING RATIFICATION: 1 rows await the owner's signature."
+            in res.stdout)
+    assert "non-terminal ids:" not in res.stdout
+    assert "ROUND NOT CLOSABLE" not in res.stdout
+
+
+def test_the_same_fixture_closes_once_the_nomination_is_ratified(run, ledger):
+    """The second half of the DoD case: ratified -> ROUND CLOSABLE, exit 0."""
+    res = run(SCRIPT, ledger(CLOSED + "\n" + RATIFIED))
+    assert res.returncode == 0, res.stdout
+    assert res.stdout.rstrip().endswith("ROUND CLOSABLE: zero non-terminal rows.")
+    assert "AWAITING" not in res.stdout
+
+
+def test_a_wait_still_counts_as_non_terminal_in_the_header_count(run, ledger):
+    res = run(SCRIPT, ledger(CLOSED + "\n" + NOMINEE))
+    assert res.stdout.splitlines()[0] == "rows: 2 | terminal: 1 | non-terminal: 1"
+
+
+def test_a_blocker_may_not_be_nominated(run, ledger):
+    """The DoD case: a blocker nominee is a structural error, exit 2."""
+    row = NOMINEE.replace("DA-2 | minor", "DA-2 | blocker")
+    res = run(SCRIPT, ledger(row))
+    assert res.returncode == 2, res.stdout
+    assert "categorically non-nominable" in res.stdout
+    assert "rows:" not in res.stdout
+
+
+@pytest.mark.parametrize("terminal", [
+    "awaiting-signature",
+    "awaiting-signature (nominated)",
+    "awaiting-signature (nominated 2026-02-30)",
+])
+def test_a_nomination_without_a_readable_date_is_an_open_row(
+        run, ledger, terminal):
+    """A nomination whose age cannot be read cannot be chased for a deadline."""
+    row = f"| DA-2 | minor | claim | verdict | crit | fix | x | {terminal} |"
+    res = run(SCRIPT, ledger(row))
+    assert res.returncode == 1, res.stdout
+    assert "non-terminal ids: DA-2" in res.stdout
+    assert "ROUND NOT CLOSABLE: 1 open rows." in res.stdout
+    assert "AWAITING RATIFICATION" not in res.stdout
+    assert "  CONSISTENCY: DA-2" in res.stdout
+
+
+@pytest.mark.parametrize("criterion", ["", "-", "—"])
+def test_a_nominee_keeps_the_criterion_written_at_adjudication(
+        run, ledger, criterion):
+    """A nominee is UPHELD, exactly as a ratified residue is."""
+    row = NOMINEE.replace("| crit |", f"| {criterion} |")
+    res = run(SCRIPT, ledger(row))
+    assert res.returncode == 2, res.stdout
+    assert "is awaiting-signature but its readiness-criterion cell" in res.stdout
+
+
+def test_an_open_row_outranks_both_waits(run, ledger):
+    """Bucket 1 wins, and the two queues are still listed under it."""
+    res = run(SCRIPT, ledger("\n".join([OPEN_TOO, NOMINEE, NO_ACTION])))
+    assert res.returncode == 1, res.stdout
+    assert "non-terminal ids: DA-4" in res.stdout
+    assert "awaiting-signature ids: DA-2" in res.stdout
+    assert "awaiting-logged-no-action ids: DA-3" in res.stdout
+    assert "ROUND NOT CLOSABLE: 1 open rows." in res.stdout
+
+
+def test_ratification_outranks_the_logged_no_action_wait(run, ledger):
+    """The MIXED state: one state line, and it is the ratification one."""
+    res = run(SCRIPT, ledger("\n".join([NOMINEE, NO_ACTION])))
+    assert res.returncode == 1, res.stdout
+    assert "awaiting-logged-no-action ids: DA-3" in res.stdout
+    assert "ROUND AWAITING RATIFICATION" in res.stdout
+    assert "ROUND AWAITING Z3 CLOSURE" not in res.stdout
+
+
+def test_the_logged_no_action_queue_has_a_state_line_of_its_own(run, ledger):
+    res = run(SCRIPT, ledger(CLOSED + "\n" + NO_ACTION))
+    assert res.returncode == 1, res.stdout
+    assert ("ROUND AWAITING Z3 CLOSURE: 1 rows await the owner's act."
+            in res.stdout)
+
+
+@pytest.mark.parametrize("rows", [
+    OPEN_TOO + "\n" + NOMINEE,
+    NOMINEE + "\n" + NO_ACTION,
+    CLOSED + "\n" + NO_ACTION,
+    CLOSED,
+])
+def test_exactly_one_state_line_is_printed(run, ledger, rows):
+    """Four buckets, one state line — that of the first bucket that matches."""
+    res = run(SCRIPT, ledger(rows))
+    states = sum(
+        res.stdout.count(literal)
+        for literal in ("ROUND NOT CLOSABLE", "ROUND AWAITING RATIFICATION",
+                        "ROUND AWAITING Z3 CLOSURE", "ROUND CLOSABLE")
+    )
+    assert states == 1, res.stdout
+
+
+def test_a_waiting_row_is_not_reported_as_an_unidentifiable_batch(run, ledger):
+    """A nominee was never handed to a fixer; it belongs to no batch."""
+    rows = "\n".join([
+        NOMINEE.replace("| fix |", "|  |"),
+        tagged("V1-1", "upheld, origin:fix-application from:aa11", fix="aa11"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert "batch not identifiable" not in res.stdout
+
+
+# --- the durable register ---------------------------------------------------
+
+
+def test_a_ledger_with_no_register_and_no_nomination_prints_nothing_new(
+        run, ledger):
+    """The compatibility claim: no register in play, no register line."""
+    res = run(SCRIPT, ledger(CLOSED + "\n" + OPEN))
+    assert "residue register" not in res.stdout
+    assert "rows: 2 | terminal: 1 | non-terminal: 1" in res.stdout
+
+
+def test_a_legacy_seven_cell_ledger_prints_no_register_line(run, ledger):
+    row = "| DA-1 | major | claim | verdict | fix | LANDED | verified-landed |"
+    res = run(SCRIPT, ledger(row, header=HEADER_7))
+    assert res.returncode == 0, res.stdout
+    assert "residue register" not in res.stdout
+
+
+def test_the_register_path_is_derived_from_the_ledger_layout(run, tmp_path):
+    """`<root>/.critic-ledger/<run>/fix-ledger.md` gives the register beside it."""
+    path = run_ledger(tmp_path, CLOSED + "\n" + NOMINEE)
+    register(tmp_path / ".critic-ledger", reg_row())
+    res = run(SCRIPT, path)
+    assert res.returncode == 1, res.stdout
+    assert "residue-register.md" in res.stdout
+    assert "rows: 1 | nominated 1 | ratified 0 | expired-reopened 0" in res.stdout
+
+
+def test_the_register_flag_overrides_the_convention(run, tmp_path):
+    path = run_ledger(tmp_path, CLOSED + "\n" + NOMINEE)
+    register(tmp_path / ".critic-ledger", reg_row())
+    elsewhere = register(tmp_path, reg_row(), reg_row(rid="run1/DA-9"),
+                         name="other-register.md")
+    res = run(SCRIPT, path, "--register", elsewhere)
+    assert "rows: 2 |" in res.stdout
+    assert "other-register.md" in res.stdout
+
+
+def test_a_ledger_outside_the_run_root_derives_no_register_path(run, ledger):
+    res = run(SCRIPT, ledger(NOMINEE))
+    assert "residue register: n/a (path not derived" in res.stdout
+    assert res.returncode == 1, res.stdout
+
+
+def test_a_derivable_register_that_does_not_exist_is_reported(run, tmp_path):
+    path = run_ledger(tmp_path, CLOSED + "\n" + NOMINEE)
+    res = run(SCRIPT, path)
+    assert "residue register: n/a (not found at " in res.stdout
+    assert "residue-register.md)" in res.stdout
+
+
+def test_the_flag_puts_the_register_in_play_without_a_nomination(run, ledger,
+                                                                 tmp_path):
+    """A closable ledger still gets the aggregate when the flag names one."""
+    reg = register(tmp_path, reg_row(status="ratified 2026-01-01"))
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert res.returncode == 0, res.stdout
+    assert "rows: 1 | nominated 0 | ratified 1 | expired-reopened 0" in res.stdout
+    assert res.stdout.rstrip().endswith("ROUND CLOSABLE: zero non-terminal rows.")
+
+
+def test_the_flag_without_a_value_is_a_usage_error(run, ledger):
+    res = run(SCRIPT, ledger(CLOSED), "--register")
+    assert res.returncode == 2, res.stdout
+    assert "--register needs a path" in res.stdout
+    assert res.stderr == ""
+
+
+def test_the_aggregate_counts_every_status_and_the_age_of_the_oldest(
+        run, ledger, tmp_path):
+    reg = register(
+        tmp_path,
+        reg_row(rid="r/A-1", status="nominated 2099-01-01"),
+        reg_row(rid="r/A-2", status="ratified 2026-01-01"),
+        reg_row(rid="r/A-3", status="expired-reopened 2020-01-01"),
+    )
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert "rows: 3 | nominated 1 | ratified 1 | expired-reopened 1" in res.stdout
+    assert "oldest " in res.stdout
+    assert "(2020-01-01, r/A-3)" in res.stdout
+
+
+def test_an_empty_register_prints_a_zero_aggregate(run, ledger, tmp_path):
+    reg = register(tmp_path)
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert res.returncode == 0, res.stdout
+    assert ("rows: 0 | nominated 0 | ratified 0 | expired-reopened 0 | "
+            "oldest n/a (empty register)" in res.stdout)
+
+
+def test_an_overdue_nomination_is_printed(run, ledger, tmp_path):
+    """The DoD case for the unratified nomination's own 30-day limit."""
+    reg = register(tmp_path, reg_row(status="nominated 2020-01-01"))
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert "NOMINATION OVERDUE: run1/DA-2 (nominated 2020-01-01," in res.stdout
+    assert "the 30-day limit on an UNRATIFIED nomination is OURS" in res.stdout
+
+
+def test_a_fresh_nomination_is_not_overdue(run, ledger, tmp_path):
+    reg = register(tmp_path, reg_row(status="nominated 2099-01-01"))
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert "NOMINATION OVERDUE" not in res.stdout
+
+
+def test_an_expired_review_by_is_printed(run, ledger, tmp_path):
+    """The DoD case: expiry RE-OPENS by default, never renews in silence."""
+    reg = register(tmp_path, reg_row(status="ratified 2020-01-01",
+                                     review_by="2020-06-01"))
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert "REVIEW-BY EXPIRED: run1/DA-2 (review-by 2020-06-01," in res.stdout
+    assert "expiry RE-OPENS by default" in res.stdout
+
+
+def test_a_review_by_still_ahead_is_not_printed(run, ledger, tmp_path):
+    reg = register(tmp_path, reg_row(status="ratified 2026-01-01",
+                                     review_by="2099-01-01"))
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert "REVIEW-BY EXPIRED" not in res.stdout
+
+
+def test_an_unratified_row_is_not_charged_with_an_expired_review_by(
+        run, ledger, tmp_path):
+    """Only accepted risk is re-counted; a nominee has its own deadline."""
+    reg = register(tmp_path, reg_row(status="nominated 2099-01-01",
+                                     review_by="2020-01-01"))
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert "REVIEW-BY EXPIRED" not in res.stdout
+
+
+def test_a_second_cycle_row_demands_an_owner_fork(run, ledger, tmp_path):
+    reg = register(tmp_path,
+                   reg_row(status="expired-reopened 2026-01-01 (#2)"))
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert "SECOND CYCLE — OWNER FORK REQUIRED: run1/DA-2" in res.stdout
+    assert "cycle #2" in res.stdout
+
+
+def test_a_first_reopen_raises_no_fork(run, ledger, tmp_path):
+    reg = register(tmp_path, reg_row(status="expired-reopened 2026-01-01"))
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert "SECOND CYCLE" not in res.stdout
+
+
+def test_a_nomination_with_no_register_row_is_named(run, tmp_path):
+    path = run_ledger(tmp_path, CLOSED + "\n" + NOMINEE)
+    register(tmp_path / ".critic-ledger", reg_row(rid="run1/DA-9"))
+    res = run(SCRIPT, path)
+    assert "NOMINATION WITHOUT A REGISTER ROW: DA-2" in res.stdout
+
+
+def test_a_run_qualified_id_accounts_for_the_bare_ledger_id(run, tmp_path):
+    path = run_ledger(tmp_path, CLOSED + "\n" + NOMINEE)
+    register(tmp_path / ".critic-ledger", reg_row(rid="run1/DA-2"))
+    res = run(SCRIPT, path)
+    assert "NOMINATION WITHOUT A REGISTER ROW" not in res.stdout
+
+
+def test_the_honest_boundary_is_printed_with_the_aggregate(run, ledger,
+                                                           tmp_path):
+    reg = register(tmp_path, reg_row())
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert "visibility, not traction" in res.stdout
+    assert "append-only in this release" in res.stdout
+
+
+def test_no_register_line_changes_the_exit_code(run, ledger, tmp_path):
+    """Overdue, expired and second-cycle at once, on a closable ledger."""
+    reg = register(
+        tmp_path,
+        reg_row(rid="r/A-1", status="nominated 2020-01-01"),
+        reg_row(rid="r/A-2", status="ratified 2020-01-01",
+                review_by="2020-06-01"),
+        reg_row(rid="r/A-3", status="expired-reopened 2020-01-01 (#3)"),
+    )
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert res.returncode == 0, res.stdout
+    assert "NOMINATION OVERDUE" in res.stdout
+    assert "REVIEW-BY EXPIRED" in res.stdout
+    assert "SECOND CYCLE" in res.stdout
+
+
+# --- the register's fail-closed parsing -------------------------------------
+
+
+@pytest.mark.parametrize(("row", "message"), [
+    (reg_row(rationale=""), "blank `rationale`"),
+    (reg_row(rationale="—"), "blank `rationale`"),
+    (reg_row(control=""), "blank `compensating-control`"),
+    (reg_row(control="-"), "blank `compensating-control`"),
+    (reg_row(sev="blocker"), "categorically non-nominable"),
+    (reg_row(review_by="soon"), "it must be a calendar-valid ISO date"),
+    (reg_row(review_by="2026-02-30"), "it must be a calendar-valid ISO date"),
+    (reg_row(status="accepted"), "it must be one of nominated"),
+    (reg_row(status="nominated"), "it must be one of nominated"),
+    (reg_row(status="nominated 2026-02-30"), "not a calendar date"),
+])
+def test_a_malformed_register_row_is_a_structural_error(
+        run, ledger, tmp_path, row, message):
+    reg = register(tmp_path, row)
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert res.returncode == 2, res.stdout
+    assert "RESIDUE REGISTER STRUCTURAL ERRORS:" in res.stdout
+    assert message in res.stdout
+
+
+def test_the_direct_risk_literal_is_a_legitimate_compensating_control(
+        run, ledger, tmp_path):
+    reg = register(tmp_path, reg_row(control="none — direct risk accepted"))
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert res.returncode == 0, res.stdout
+    assert "rows: 1 |" in res.stdout
+
+
+def test_a_duplicate_register_id_is_a_structural_error(run, ledger, tmp_path):
+    reg = register(tmp_path, reg_row(), reg_row())
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert res.returncode == 2, res.stdout
+    assert "DUPLICATE REGISTER ID run1/DA-2" in res.stdout
+
+
+def test_a_short_register_row_is_a_structural_error(run, ledger, tmp_path):
+    reg = register(tmp_path, "| run1/DA-2 | minor | hook | why | control |")
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert res.returncode == 2, res.stdout
+    assert "malformed register row (5 cells, need 8" in res.stdout
+
+
+def test_a_register_header_of_the_wrong_width_is_a_structural_error(
+        run, ledger, tmp_path):
+    reg = register(tmp_path, reg_row(),
+                   header="| run-qualified id | severity |\n|---|---|\n")
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert res.returncode == 2, res.stdout
+    assert "register header has 2 cells" in res.stdout
+
+
+def test_register_rows_stop_at_the_next_heading(run, ledger, tmp_path):
+    reg = tmp_path / "reg.md"
+    reg.write_text(
+        REG_HEADER + reg_row() + "\n\n## Notes\n" + REG_HEADER
+        + reg_row(rid="r/X-1") + "\n",
+        encoding="utf-8",
+    )
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert "rows: 1 |" in res.stdout
+
+
+def test_an_unreadable_register_is_reported_and_never_fatal(
+        run, ledger, tmp_path):
+    """A directory in the register's place is a report line, not a traceback."""
+    (tmp_path / "reg-dir.md").mkdir()
+    res = run(SCRIPT, ledger(CLOSED), "--register", tmp_path / "reg-dir.md")
+    assert res.returncode == 0, res.stdout
+    assert "residue register: n/a (" in res.stdout
+    assert res.stderr == ""
+
+
+# --- 0.3.0 stopping metrics: the residual-defect ESTIMATE and the plateau ---
+#
+# Both are REPORT-ONLY: nothing here may move an exit code. The estimate has
+# exactly ONE source for `k` — the header's machine-form `Lenses:` lines —
+# and the plateau derives the chronology of its window from each ledger's own
+# `Round-started` field rather than from the order of the arguments. The
+# tests below pin both refusals as hard as they pin the numbers: an estimate
+# computed off a guessed `k`, or a plateau ordered by argument position,
+# would be a wrong number printed with the same confidence as a right one.
+
+ESTIMATE = "residual-defect ESTIMATE"
+PLATEAU = "severity plateau"
+
+
+def lens_field(*prefixes: str, tail: str = "") -> str:
+    """A header preamble whose `Lenses:` field declares these prefixes."""
+    body = "".join(f"  - {p} | lens {p.lower()} | sonnet\n" for p in prefixes)
+    return "- Lenses:\n" + body + tail + "\n"
+
+
+def raised(rid: str, sev: str = "major", criterion: str = "crit") -> str:
+    """One terminal, upheld findings row — the shape a raised finding takes."""
+    return (f"| {rid} | {sev} | claim | verdict | {criterion} | fix | "
+            f"LANDED | verified-landed |")
+
+
+def window_ledger(ledger, day: str, majors: int, *, name: str):
+    """A ledger dated `day` carrying `majors` major rows — a plateau member."""
+    rows = "\n".join(raised(f"PA-{i}") for i in range(1, majors + 1))
+    return ledger(rows, preamble=f"- Round-started: {day}\n", name=name)
+
+
+# --- the prefixes that belong to a process rather than to a lens -----------
+#
+# `Process prefixes:` declares what is NOT a lens: the `NOTICED OUTSIDE
+# BATCH` prefix and a class-kill gate's own row take ids of exactly a lens's
+# shape, so without the field nothing tells them apart machine-side. The
+# field is read by its OWN anchored pattern, and the property these cases
+# pin is that it stays out of `k`: a process prefix reaching `lens_prefixes`
+# would inflate the residual-defect estimate's lens count.
+
+FIVE_LENSES = ("AA", "BB", "CC", "DD", "EE")
+# Five lenses, four raised findings, three of them single-lens: k=5, D=4,
+# f1=3 -> 6.4, the hand-computed value the estimate case below reuses.
+ESTIMATE_ROWS = "\n".join([
+    raised("AA-1"), raised("BB-1"), raised("CC-1"),
+    raised("DD-1", sev="minor", criterion="=CC-1"),
+    raised("EE-1", sev="minor"),
+])
+
+
+def test_the_process_prefix_field_leaves_k_and_the_estimate_untouched(
+    run, ledger
+):
+    """The same ledger with and without the field recounts identically.
+
+    This is the preserved property, checked rather than assumed: the new
+    field has its own pattern and feeds nothing the `Lenses:` run feeds, so
+    `k` is 5 either way and the two prefixes it names appear in no lens
+    list. Were the field read by a widened lens pattern, `k` would read 7.
+    """
+    without = run(SCRIPT, ledger(ESTIMATE_ROWS, preamble=lens_field(*FIVE_LENSES)))
+    with_field = run(
+        SCRIPT,
+        ledger(
+            ESTIMATE_ROWS,
+            preamble="- Process prefixes: NB, CK\n" + lens_field(*FIVE_LENSES),
+        ),
+    )
+    assert without.returncode == 0, without.stdout
+    assert with_field.returncode == 0, with_field.stdout
+    assert with_field.stdout == without.stdout
+    assert "k 5 (AA, BB, CC, DD, EE)" in with_field.stdout
+    assert "NB" not in with_field.stdout
+    assert "CK" not in with_field.stdout
+
+
+def test_the_literal_none_is_a_readable_process_prefix_field(run, ledger):
+    """`none` and an ABSENT field say the same thing and recount the same."""
+    declared = run(
+        SCRIPT,
+        ledger(
+            ESTIMATE_ROWS,
+            preamble="- Process prefixes: none\n" + lens_field(*FIVE_LENSES),
+        ),
+    )
+    absent = run(SCRIPT, ledger(ESTIMATE_ROWS, preamble=lens_field(*FIVE_LENSES)))
+    assert declared.returncode == 0, declared.stdout
+    assert declared.stdout == absent.stdout
+
+
+def test_an_unreadable_process_prefix_field_is_a_structural_error(run, ledger):
+    """A field that arms nothing on a typo would be worse than no field."""
+    res = run(
+        SCRIPT,
+        ledger(
+            CLOSED,
+            preamble="- Process prefixes: the noticed one\n",
+        ),
+    )
+    assert res.returncode == 2, res.stdout
+    assert "`Process prefixes:` reads 'the noticed one'" in res.stdout
+
+
+def test_a_process_prefix_that_is_also_a_lens_is_a_structural_error(run, ledger):
+    """A prefix written in both fields tells a process from a lens nowhere."""
+    res = run(
+        SCRIPT,
+        ledger(
+            ESTIMATE_ROWS,
+            preamble="- Process prefixes: NB, CC\n" + lens_field(*FIVE_LENSES),
+        ),
+    )
+    assert res.returncode == 2, res.stdout
+    assert "`Process prefixes:` names CC" in res.stdout
+
+
+@pytest.mark.parametrize(
+    "field_line",
+    ["- Process prefixes:\n", "- Process prefixes: \n"],
+    ids=["colon-at-end-of-line", "one-trailing-space"],
+)
+def test_an_empty_process_prefix_field_is_present_and_unreadable(
+    run, ledger, field_line
+):
+    """PRESENT-and-empty is not ABSENT, whatever the editor did to the space.
+
+    A line ending AT THE COLON used to match the field's pattern nowhere and
+    read exactly like an absent field — no error, no diagnostic, exit 0 —
+    while the same line with one trailing space was caught. A fail-closed
+    gate must not hang on a byte an editor is free to strip on save: both
+    spellings are the same empty declaration and both are structural errors.
+    """
+    res = run(SCRIPT, ledger(CLOSED, preamble=field_line))
+    assert res.returncode == 2, res.stdout
+    assert "STRUCTURAL ERRORS" in res.stdout
+    assert "`Process prefixes:` reads ''" in res.stdout
+
+
+def test_two_process_prefix_fields_are_a_structural_error(run, ledger):
+    """The field is ONE per ledger; a second line is an overwrite.
+
+    Both values here are individually well-formed, which is the point: the
+    parser used to return on the first match and discard the second with no
+    trace, where `Row schema:` and `Stop-rule freeze:` both refuse a second
+    declaration outright.
+    """
+    res = run(
+        SCRIPT,
+        ledger(
+            CLOSED,
+            preamble="- Process prefixes: NB\n- Process prefixes: CK\n",
+        ),
+    )
+    assert res.returncode == 2, res.stdout
+    assert "carries 2 `Process prefixes:` fields" in res.stdout
+    assert "never a silent replacement" in res.stdout
+
+
+# --- k, and the one place it comes from ------------------------------------
+
+
+def test_a_ledger_declaring_no_lenses_gets_no_estimate(run, ledger):
+    """The compat shape: an old ledger names no `k`, so none is invented."""
+    res = run(SCRIPT, ledger(CLOSED))
+    assert res.returncode == 0, res.stdout
+    assert f"{ESTIMATE}: n/a: k not derived from the header" in res.stdout
+    assert "N-hat" not in res.stdout
+
+
+def test_three_lenses_are_below_the_applicability_floor(run, ledger):
+    """The DoD case: k=3 prints `n/a: k<4` and no number at all."""
+    res = run(SCRIPT, ledger(CLOSED, preamble=lens_field("AA", "BB", "CC")))
+    assert res.returncode == 0, res.stdout
+    assert f"{ESTIMATE}: n/a: k<4 (k=3;" in res.stdout
+    assert "N-hat" not in res.stdout
+
+
+def test_the_estimate_matches_the_hand_computed_value(run, ledger):
+    """The DoD case: k=5, D=4, f1=3 -> 4 + (4/5)*3 = 6.4, computed by hand.
+
+    `DD-1` is a cross-lens duplicate of `CC-1` by the `=id` convention, so
+    that finding was raised by two lenses and is not a singleton; `V1-1` was
+    raised by a verifier, which is no lens at all, so it is not counted.
+    """
+    rows = "\n".join([
+        raised("AA-1"), raised("BB-1"), raised("CC-1"),
+        raised("DD-1", sev="minor", criterion="=CC-1"),
+        raised("EE-1", sev="minor"), raised("V1-1", sev="minor"),
+    ])
+    res = run(SCRIPT, ledger(
+        rows, preamble=lens_field("AA", "BB", "CC", "DD", "EE")))
+    assert res.returncode == 0, res.stdout
+    assert ("N-hat 6.4 | D 4 raised | f1 3 single-lens | k 5 "
+            "(AA, BB, CC, DD, EE)" in res.stdout)
+
+
+def test_a_composite_primary_id_is_read_as_a_duplicate_pointer(run, ledger):
+    """A criterion cell `=V-CIT-1` is a pointer, not prose.
+
+    The `=id` convention takes ids under the WHOLE id contract, composite
+    prefixes included, so `AA-1` and `BB-1` glossing the same verifier-pass
+    primary are ONE group two lenses raised: k=4, D=3, f1=2 ->
+    3 + (3/4)*2 = 4.5. Were the composite pointer read as prose, the same two
+    rows would stay two single-lens groups and the estimate would be 7.0.
+    """
+    rows = "\n".join([
+        raised("AA-1", criterion="=V-CIT-1"),
+        raised("BB-1", criterion="=V-CIT-1"),
+        raised("CC-1"), raised("DD-1"),
+    ])
+    res = run(SCRIPT, ledger(
+        rows, preamble=lens_field("AA", "BB", "CC", "DD")))
+    assert res.returncode == 0, res.stdout
+    assert ("N-hat 4.5 | D 3 raised | f1 2 single-lens | k 4 "
+            "(AA, BB, CC, DD)" in res.stdout)
+
+
+def test_a_verifier_row_never_raises_k(run, ledger):
+    """The whole reason `k` is not counted off the table: passes add prefixes.
+
+    Four lenses are declared and three verification passes have written
+    rows. A `k` counted from the id prefixes would be 7; the declared count
+    is 4, and only the declared count may be used.
+    """
+    rows = "\n".join([
+        raised("AA-1"), raised("BB-1"), raised("CC-1"), raised("DD-1"),
+        raised("V1-1"), raised("V2-1"), raised("V3-1"),
+    ])
+    res = run(SCRIPT, ledger(
+        rows, preamble=lens_field("AA", "BB", "CC", "DD")))
+    assert "| k 4 (AA, BB, CC, DD)" in res.stdout
+    assert "N-hat 7.0 | D 4 raised | f1 4 single-lens" in res.stdout
+
+
+def test_reading_the_lens_run_stops_at_the_first_foreign_line(run, ledger):
+    """Prose below the run is not counted, and neither is a later bullet."""
+    preamble = (lens_field("AA", "BB", "CC", "DD",
+                           tail="  timebox 15 min each.\n")
+                + "- Verifier passes: V\n"
+                + "  - ZZ | not a lens line, it is below the prose | sonnet\n")
+    res = run(SCRIPT, ledger(raised("AA-1"), preamble=preamble))
+    assert "| k 4 (AA, BB, CC, DD)" in res.stdout
+    assert "ZZ" not in res.stdout
+
+
+def test_a_prefix_written_twice_is_one_lens(run, ledger):
+    res = run(SCRIPT, ledger(
+        raised("AA-1"),
+        preamble=lens_field("AA", "BB", "CC", "DD", "AA")))
+    assert "| k 4 (AA, BB, CC, DD)" in res.stdout
+
+
+def test_a_lens_line_of_the_wrong_shape_is_not_a_lens(run, ledger):
+    """The old arrow form parses as nothing: `n/a`, never a partial count."""
+    preamble = ("- Lenses:\n"
+                "  - consistency -> AA -> sonnet -> 15 min\n"
+                "  - correctness -> BB -> sonnet -> 15 min\n"
+                "  - coverage -> CC -> sonnet -> 15 min\n"
+                "  - cost -> DD -> sonnet -> 15 min\n")
+    res = run(SCRIPT, ledger(raised("AA-1"), preamble=preamble))
+    assert f"{ESTIMATE}: n/a: k not derived from the header" in res.stdout
+
+
+def test_a_refuted_finding_was_still_raised(run, ledger):
+    """D counts findings BEFORE adjudication: a refuted claim is in it."""
+    refuted = "| BB-1 | minor | claim | verdict | — | fix | x | refuted-with-reason |"
+    rows = "\n".join([raised("AA-1"), refuted, raised("CC-1"), raised("DD-1")])
+    res = run(SCRIPT, ledger(
+        rows, preamble=lens_field("AA", "BB", "CC", "DD")))
+    assert "N-hat 7.0 | D 4 raised | f1 4 single-lens" in res.stdout
+
+
+def test_the_estimate_carries_its_caveat_and_both_owners(run, ledger):
+    """The number never travels without the caution, nor the caution's owner."""
+    res = run(SCRIPT, ledger(
+        "\n".join(raised(f"{p}-1") for p in ("AA", "BB", "CC", "DD")),
+        preamble=lens_field("AA", "BB", "CC", "DD")))
+    assert "ESTIMATE is ADVISORY" in res.stdout
+    assert "Lens diversity does not invalidate it" in res.stdout
+    assert "four field measurements" in res.stdout
+    assert "75-94%" in res.stdout
+    assert "comparability is not established" in res.stdout
+
+
+def test_the_estimate_never_moves_the_exit_code(run, ledger):
+    """An open row still exits 1 and a closable ledger still exits 0."""
+    open_row = "| BB-1 | major | claim | verdict |  | fix | x | open |"
+    preamble = lens_field("AA", "BB", "CC", "DD")
+    assert run(SCRIPT, ledger(raised("AA-1"), preamble=preamble)).returncode == 0
+    res = run(SCRIPT, ledger(raised("AA-1") + "\n" + open_row,
+                             preamble=preamble))
+    assert res.returncode == 1, res.stdout
+    assert "N-hat" in res.stdout
+
+
+# --- the severity-weighted plateau and its derived chronology --------------
+
+
+def test_two_prev_ledgers_print_the_plateau(run, ledger, tmp_path):
+    """The DoD case: 7 -> 4 -> 2 gives deltas -3 and -2, average -2.5."""
+    cur = window_ledger(ledger, "2026-08-29", 2, name="cur.md")
+    p1 = window_ledger(ledger, "2026-08-20", 4, name="p1.md")
+    p2 = window_ledger(ledger, "2026-08-10", 7, name="p2.md")
+    res = run(SCRIPT, cur, "--prev", p1, "--prev", p2)
+    assert res.returncode == 0, res.stdout
+    assert (f"{PLATEAU} (3-round moving average of major+blocker deltas): "
+            "-2.5 | major+blocker per round (oldest first): 7 -> 4 -> 2 | "
+            "deltas -3, -2" in res.stdout)
+    assert "prev order: reordered" not in res.stdout
+
+
+def test_the_window_is_ordered_by_the_ledgers_not_by_the_arguments(
+        run, ledger, tmp_path):
+    """Arguments in the wrong order give the SAME plateau, plus the notice."""
+    cur = window_ledger(ledger, "2026-08-29", 2, name="cur.md")
+    p1 = window_ledger(ledger, "2026-08-20", 4, name="p1.md")
+    p2 = window_ledger(ledger, "2026-08-10", 7, name="p2.md")
+    res = run(SCRIPT, cur, "--prev", p2, "--prev", p1)
+    assert res.returncode == 0, res.stdout
+    assert "prev order: reordered by Round-started" in res.stdout
+    assert "(oldest first): 7 -> 4 -> 2 | deltas -3, -2" in res.stdout
+
+
+def test_the_delta_goes_to_the_nearer_previous_ledger(run, ledger):
+    """Whichever order the two arrive in, the delta is against the nearer."""
+    cur = window_ledger(ledger, "2026-08-29", 2, name="cur.md")
+    p1 = window_ledger(ledger, "2026-08-20", 4, name="p1.md")
+    p2 = window_ledger(ledger, "2026-08-10", 7, name="p2.md")
+    for argv in ((p1, p2), (p2, p1)):
+        res = run(SCRIPT, cur, "--prev", argv[0], "--prev", argv[1])
+        assert f"DELTA vs {p1}:" in res.stdout
+
+
+def test_a_plateau_rising_is_reported_with_its_sign(run, ledger):
+    cur = window_ledger(ledger, "2026-08-29", 8, name="cur.md")
+    p1 = window_ledger(ledger, "2026-08-20", 4, name="p1.md")
+    p2 = window_ledger(ledger, "2026-08-10", 2, name="p2.md")
+    res = run(SCRIPT, cur, "--prev", p1, "--prev", p2)
+    assert "deltas): +3.0 | major+blocker per round (oldest first): 2 -> 4 -> 8" \
+        in res.stdout
+
+
+@pytest.mark.parametrize("missing", ["cur", "p1", "p2"])
+def test_a_ledger_without_round_started_stops_the_plateau(run, ledger, missing):
+    """Any member of the window without a readable date refuses the metric."""
+    days = {"cur": "2026-08-29", "p1": "2026-08-20", "p2": "2026-08-10"}
+    paths = {
+        name: (ledger("\n".join(raised(f"PA-{i}") for i in range(1, 3)),
+                      name=f"{name}.md")
+               if name == missing
+               else window_ledger(ledger, days[name], 2, name=f"{name}.md"))
+        for name in ("cur", "p1", "p2")
+    }
+    res = run(SCRIPT, paths["cur"], "--prev", paths["p1"],
+              "--prev", paths["p2"])
+    assert res.returncode == 0, res.stdout
+    assert (f"{PLATEAU}: n/a: the order of the previous ledgers is not derived"
+            in res.stdout)
+    assert "DELTA vs" in res.stdout
+
+
+def test_two_previous_ledgers_of_the_same_date_have_no_order(run, ledger):
+    cur = window_ledger(ledger, "2026-08-29", 2, name="cur.md")
+    p1 = window_ledger(ledger, "2026-08-20", 4, name="p1.md")
+    p2 = window_ledger(ledger, "2026-08-20", 7, name="p2.md")
+    res = run(SCRIPT, cur, "--prev", p1, "--prev", p2)
+    assert (f"{PLATEAU}: n/a: the order of the previous ledgers is not derived"
+            in res.stdout)
+
+
+def test_an_uncalendared_round_started_is_not_a_date(run, ledger):
+    """`2026-02-30` cannot exist, so it never orders a window."""
+    cur = window_ledger(ledger, "2026-02-30", 2, name="cur.md")
+    p1 = window_ledger(ledger, "2026-08-20", 4, name="p1.md")
+    p2 = window_ledger(ledger, "2026-08-10", 7, name="p2.md")
+    res = run(SCRIPT, cur, "--prev", p1, "--prev", p2)
+    assert (f"{PLATEAU}: n/a: the order of the previous ledgers is not derived"
+            in res.stdout)
+
+
+def test_one_prev_still_behaves_as_it_did(run, ledger):
+    """The DoD case: a single `--prev` keeps the 0.2.0 delta, unchanged."""
+    cur = window_ledger(ledger, "2026-08-29", 2, name="cur.md")
+    p1 = window_ledger(ledger, "2026-08-20", 4, name="p1.md")
+    res = run(SCRIPT, cur, "--prev", p1)
+    assert res.returncode == 0, res.stdout
+    assert f"DELTA vs {p1}:" in res.stdout
+    assert f"{PLATEAU}: n/a: 1 previous ledger given" in res.stdout
+    assert "moving average" not in res.stdout
+
+
+def test_a_third_prev_is_a_usage_error(run, ledger):
+    cur = window_ledger(ledger, "2026-08-29", 2, name="cur.md")
+    p1 = window_ledger(ledger, "2026-08-20", 4, name="p1.md")
+    res = run(SCRIPT, cur, "--prev", p1, "--prev", p1, "--prev", p1)
+    assert res.returncode == 2, res.stdout
+    assert "--prev takes at most 2 paths" in res.stdout
+
+
+def test_a_prev_with_a_broken_table_refuses_the_plateau(run, ledger):
+    """A structurally broken window member costs the metric, not the round."""
+    cur = window_ledger(ledger, "2026-08-29", 2, name="cur.md")
+    p1 = window_ledger(ledger, "2026-08-20", 4, name="p1.md")
+    broken = ledger("| DA-1 | major | a|b | v | crit | f | LANDED | "
+                    "verified-landed |",
+                    preamble="- Round-started: 2026-08-10\n", name="p2.md")
+    res = run(SCRIPT, cur, "--prev", p1, "--prev", broken)
+    assert res.returncode == 0, res.stdout
+    assert f"{PLATEAU}: n/a: a --prev ledger has structural errors" in res.stdout
+    assert f"DELTA vs {p1}:" in res.stdout
+
+
+def test_a_missing_prev_path_is_still_a_structural_error(run, ledger, tmp_path):
+    cur = window_ledger(ledger, "2026-08-29", 2, name="cur.md")
+    res = run(SCRIPT, cur, "--prev", tmp_path / "absent.md")
+    assert res.returncode == 2, res.stdout
+    assert "cannot read" in res.stdout
+
+
+def test_no_prev_prints_no_plateau_line_at_all(run, ledger):
+    """Without `--prev` there is no delta block, so there is no plateau line."""
+    res = run(SCRIPT, window_ledger(ledger, "2026-08-29", 2, name="cur.md"))
+    assert PLATEAU not in res.stdout
+
+
+# --- 0.3.0 the round contract: its two terminal statuses and its backstop ---
+#
+# Both statuses close a finding on a signature given BEFORE the round, which
+# is exactly why neither may close one by its opening words: the tests below
+# pin the COMPLETE-literal rule as hard as they pin terminality. Two more
+# claims are load-bearing here. `frozen-carried` must NOT block closability —
+# that is the whole difference from `superseded-by-rewrite`, and a round
+# stopped by its own rule would otherwise have no legitimate exit. And the
+# `Stop-rule freeze:` header field has TWO independent writers, so "written
+# once, by the first occasion" is enforced rather than left to whoever writes
+# second. The last group is the security-lens backstop: the default class of
+# a declared security lens is removed in writing or not at all.
+
+OUT_OF_SCOPE = "out-of-scope-by-contract"
+FROZEN_CARRIED = "frozen-carried"
+FREEZE_FIELD = (
+    "- Stop-rule freeze: 2026-08-29 | carried-to: 2026-09-01-120000-object\n"
+)
+
+
+def contract_row(terminal: str, rid: str = "DA-1", verdict: str = "upheld",
+                 sev: str = "major") -> str:
+    """One 8-cell row whose terminal cell is the value under test."""
+    return f"| {rid} | {sev} | claim | {verdict} | crit | fix | x | {terminal} |"
+
+
+# --- out-of-scope-by-contract ----------------------------------------------
+
+
+def test_the_complete_contract_literal_is_terminal(run, ledger):
+    res = run(SCRIPT, ledger(contract_row(
+        f"{OUT_OF_SCOPE} (NG-2, signed 2026-08-29)")))
+    assert res.returncode == 0, res.stdout
+    assert "rows: 1 | terminal: 1 | non-terminal: 0" in res.stdout
+
+
+@pytest.mark.parametrize("cell", [
+    OUT_OF_SCOPE,
+    f"{OUT_OF_SCOPE} (signed 2026-08-29)",
+    f"{OUT_OF_SCOPE} (NG-2)",
+    f"{OUT_OF_SCOPE} (NG-2, signed)",
+    f"{OUT_OF_SCOPE} NG-2 signed 2026-08-29",
+])
+def test_a_partial_contract_literal_is_not_terminal(run, ledger, cell):
+    """A pre-signed disposition closes a row only in full, never in part."""
+    res = run(SCRIPT, ledger(contract_row(cell)))
+    assert res.returncode == 1, res.stdout
+    assert "expected the complete literal" in res.stdout
+    assert "non-terminal ids: DA-1" in res.stdout
+
+
+def test_an_impossible_contract_signature_date_is_not_terminal(run, ledger):
+    """`2026-02-30` names no day, so it cannot be an auditable signature."""
+    res = run(SCRIPT, ledger(contract_row(
+        f"{OUT_OF_SCOPE} (NG-2, signed 2026-02-30)")))
+    assert res.returncode == 1, res.stdout
+    assert "is not a calendar date" in res.stdout
+
+
+def test_a_security_pii_row_may_not_leave_on_the_pre_signature(run, ledger):
+    """The one class whose BOTH outcomes need the owner's live word."""
+    res = run(SCRIPT, ledger(contract_row(
+        f"{OUT_OF_SCOPE} (NG-2, signed 2026-08-29)",
+        rid="SE-1", verdict="upheld class:security-pii")))
+    assert res.returncode == 2, res.stdout
+    assert "no live `user-signed <date>`" in res.stdout
+
+
+def test_a_security_pii_row_leaves_with_its_own_live_signature(run, ledger):
+    res = run(SCRIPT, ledger(contract_row(
+        f"{OUT_OF_SCOPE} (NG-2, signed 2026-08-29) user-signed 2026-08-30",
+        rid="SE-1", verdict="upheld class:security-pii")))
+    assert res.returncode == 0, res.stdout
+
+
+@pytest.mark.parametrize("slug", ["security", "pii", "sec-pii"])
+def test_a_synonym_of_the_class_slug_is_not_the_class_mark(run, ledger, slug):
+    """ONE literal keys every check: `security-pii` and nothing near it."""
+    res = run(SCRIPT, ledger(contract_row(
+        f"{OUT_OF_SCOPE} (NG-2, signed 2026-08-29)",
+        rid="SE-1", verdict=f"upheld class:{slug}")))
+    assert res.returncode == 0, res.stdout
+
+
+# --- frozen-carried and its single header field ----------------------------
+
+
+def test_frozen_carried_is_terminal_and_prints_the_carry(run, ledger):
+    """The DoD case: two frozen rows of DIFFERENT dates, one header field."""
+    rows = "\n".join([
+        contract_row(f"{FROZEN_CARRIED} (stop-rule, 2026-08-29)",
+                     rid="DA-1", sev="blocker"),
+        contract_row(f"{FROZEN_CARRIED} (stop-rule, 2026-08-30)", rid="DA-2"),
+    ])
+    res = run(SCRIPT, ledger(rows, preamble=FREEZE_FIELD))
+    assert res.returncode == 0, res.stdout
+    assert "FROZEN CARRIED: 2 rows → 2026-09-01-120000-object" in res.stdout
+    assert "ROUND CLOSABLE: zero non-terminal rows." in res.stdout
+
+
+def test_a_frozen_blocker_is_allowed_where_a_nominated_one_is_not(run, ledger):
+    """A blocker's ONE contractual disposition is the freeze, never residue."""
+    res = run(SCRIPT, ledger(
+        contract_row(f"{FROZEN_CARRIED} (stop-rule, 2026-08-29)",
+                     sev="blocker"),
+        preamble=FREEZE_FIELD))
+    assert res.returncode == 0, res.stdout
+    assert "categorically non-nominable" not in res.stdout
+
+
+def test_a_partial_freeze_literal_is_not_terminal(run, ledger):
+    res = run(SCRIPT, ledger(contract_row(FROZEN_CARRIED),
+                             preamble=FREEZE_FIELD))
+    assert res.returncode == 1, res.stdout
+    assert "expected the complete literal" in res.stdout
+
+
+def test_a_frozen_row_without_the_header_field_is_a_structural_error(
+        run, ledger):
+    """A carry that names no destination is a transfer into nowhere."""
+    res = run(SCRIPT, ledger(
+        contract_row(f"{FROZEN_CARRIED} (stop-rule, 2026-08-29)")))
+    assert res.returncode == 2, res.stdout
+    assert "a transfer into nowhere" in res.stdout
+
+
+def test_two_freeze_fields_are_a_structural_error(run, ledger):
+    """The collision rule: two writers, one field, written ONCE."""
+    res = run(SCRIPT, ledger(
+        contract_row(f"{FROZEN_CARRIED} (stop-rule, 2026-08-29)"),
+        preamble=FREEZE_FIELD
+        + "- Stop-rule freeze: 2026-08-30 | carried-to: r-other\n"))
+    assert res.returncode == 2, res.stdout
+    assert "the header carries 2 `Stop-rule freeze:` fields" in res.stdout
+    assert "FROZEN CARRIED" not in res.stdout
+
+
+@pytest.mark.parametrize("field", [
+    "- Stop-rule freeze: 2026-08-29\n",
+    "- Stop-rule freeze: carried-to: r-next\n",
+    "- Stop-rule freeze: yesterday | carried-to: r-next\n",
+    "- Stop-rule freeze: 2026-08-29 | carried-to:\n",
+])
+def test_a_malformed_freeze_field_is_a_structural_error(run, ledger, field):
+    res = run(SCRIPT, ledger(
+        contract_row(f"{FROZEN_CARRIED} (stop-rule, 2026-08-29)"),
+        preamble=field))
+    assert res.returncode == 2, res.stdout
+    assert "`Stop-rule freeze:`" in res.stdout
+
+
+def test_an_impossible_freeze_date_in_the_header_is_a_structural_error(
+        run, ledger):
+    res = run(SCRIPT, ledger(
+        contract_row(f"{FROZEN_CARRIED} (stop-rule, 2026-08-29)"),
+        preamble="- Stop-rule freeze: 2026-02-30 | carried-to: r-next\n"))
+    assert res.returncode == 2, res.stdout
+    assert "not a calendar date" in res.stdout
+
+
+def test_carried_to_pending_at_closure_is_a_structural_error(run, ledger):
+    res = run(SCRIPT, ledger(
+        contract_row(f"{FROZEN_CARRIED} (stop-rule, 2026-08-29)"),
+        preamble="- Stop-rule freeze: 2026-08-29 | carried-to: pending\n"))
+    assert res.returncode == 2, res.stdout
+    assert "still reads `carried-to: pending`" in res.stdout
+
+
+def test_carried_to_pending_while_the_round_is_open_is_not_an_error(
+        run, ledger):
+    """`pending` is refused AT CLOSURE only — mid-round it is the normal state."""
+    rows = contract_row(f"{FROZEN_CARRIED} (stop-rule, 2026-08-29)") + "\n" + OPEN
+    res = run(SCRIPT, ledger(
+        rows, preamble="- Stop-rule freeze: 2026-08-29 | carried-to: pending\n"))
+    assert res.returncode == 1, res.stdout
+    assert "still reads" not in res.stdout
+    assert "ROUND NOT CLOSABLE: 1 open rows." in res.stdout
+
+
+# --- the security-lens backstop --------------------------------------------
+
+
+def test_a_security_lens_row_without_the_class_is_a_structural_error(
+        run, ledger):
+    """The default is the point: silence stops being a way past the gates."""
+    res = run(SCRIPT, ledger(
+        "| SE-1 | major | claim | upheld | crit | fix | LANDED | "
+        "verified-landed |",
+        preamble="- Security lens: SE\n"))
+    assert res.returncode == 2, res.stdout
+    assert "raised by the declared security lens SE" in res.stdout
+
+
+def test_a_security_lens_row_carrying_the_class_passes(run, ledger):
+    res = run(SCRIPT, ledger(
+        "| SE-1 | major | claim | upheld class:security-pii | crit | fix | "
+        "LANDED | verified-landed |",
+        preamble="- Security lens: SE\n"))
+    assert res.returncode == 0, res.stdout
+
+
+def test_the_default_is_removed_in_writing_with_a_reason(run, ledger):
+    res = run(SCRIPT, ledger(
+        "| SE-1 | major | claim | upheld; declassed:security-pii — the path "
+        "is a fixture, no real data | crit | fix | LANDED | verified-landed |",
+        preamble="- Security lens: SE\n"))
+    assert res.returncode == 0, res.stdout
+
+
+def test_a_declass_with_an_empty_reason_is_a_structural_error(run, ledger):
+    res = run(SCRIPT, ledger(
+        "| SE-1 | major | claim | upheld; declassed:security-pii — | crit | "
+        "fix | LANDED | verified-landed |",
+        preamble="- Security lens: SE\n"))
+    assert res.returncode == 2, res.stdout
+    assert "with an empty reason" in res.stdout
+
+
+def test_the_backstop_touches_only_the_declared_lens_prefix(run, ledger):
+    """A neighbouring lens's rows are not swept up by the security lens's rule."""
+    rows = "\n".join([
+        "| SE-1 | major | claim | upheld class:security-pii | crit | fix | "
+        "LANDED | verified-landed |",
+        CLOSED,
+    ])
+    res = run(SCRIPT, ledger(rows, preamble="- Security lens: SE\n"))
+    assert res.returncode == 0, res.stdout
+
+
+def test_security_lens_none_arms_no_backstop(run, ledger):
+    res = run(SCRIPT, ledger(
+        "| SE-1 | major | claim | upheld | crit | fix | LANDED | "
+        "verified-landed |",
+        preamble="- Security lens: none\n"))
+    assert res.returncode == 0, res.stdout
+
+
+def test_an_unreadable_security_lens_field_is_a_structural_error(run, ledger):
+    """A field that arms a gate is never allowed to disarm itself on a typo."""
+    res = run(SCRIPT, ledger(CLOSED, preamble="- Security lens: the sec one\n"))
+    assert res.returncode == 2, res.stdout
+    assert "`Security lens:`" in res.stdout
+
+
+def test_a_ledger_declaring_neither_field_prints_neither_report(run, ledger):
+    """The compatibility promise of this batch, asserted rather than claimed."""
+    res = run(SCRIPT, ledger(CLOSED))
+    assert res.returncode == 0, res.stdout
+    for absent in ("FROZEN CARRIED", "Stop-rule freeze", "Security lens",
+                   "security lens"):
+        assert absent not in res.stdout
+
+
+# --- an empty verdict cell: the state "not adjudicated" --------------------
+# A stage-5 layout carries transcribed findings whose verdict cells are still
+# blank. The backstop used to refuse it as a structural error, which made the
+# recount unusable exactly where it helps most — before adjudication. The
+# empty cell is a STATE now; the filled cell that leaves the class out is the
+# structural error it always was.
+
+def test_an_empty_verdict_cell_is_a_state_and_not_a_structural_error(
+        run, ledger):
+    """The fresh skeleton: exit code of an unclosed round, no error, and the
+    rows counted by their own line.
+    """
+    rows = "\n".join([
+        "| SE-1 | major | claim |  |  | fix | x |  |",
+        "| SE-2 | minor | claim |  |  | fix | x |  |",
+    ])
+    res = run(SCRIPT, ledger(rows, preamble=SECURITY_HEADER))
+    assert res.returncode == 1, res.stdout
+    assert "STRUCTURAL ERRORS" not in res.stdout
+    assert "not adjudicated: 2 rows" in res.stdout
+    assert "ROUND NOT CLOSABLE: 2 open rows." in res.stdout
+
+
+def test_a_filled_verdict_cell_without_the_class_stays_a_structural_error(
+        run, ledger):
+    """The relaxation is EXACTLY the empty case.
+
+    A verdict that was written and left the class out is a judgment made,
+    not a judgment pending: same exit code and same diagnostic as before,
+    and the row is not reported as unadjudicated.
+    """
+    row = ("| SE-1 | major | claim | upheld, the path is a fixture | crit | "
+           "fix | LANDED | verified-landed |")
+    res = run(SCRIPT, ledger(row, preamble=SECURITY_HEADER))
+    assert res.returncode == 2, res.stdout
+    assert "raised by the declared security lens SE" in res.stdout
+    assert "not adjudicated" not in res.stdout
+
+
+def test_a_ledger_with_every_verdict_filled_prints_no_such_line(run, ledger):
+    """Compatibility: the new line appears only where an empty cell does."""
+    res = run(SCRIPT, ledger(CLOSED))
+    assert res.returncode == 0, res.stdout
+    assert "not adjudicated" not in res.stdout
+
+
+# --- the per-lens sustained rate and the shelf share beside it -------------
+#
+# The between-rounds sustained-rate metric, and the `shelf:` tag beside it.
+# Three properties are pinned hard, because each is a way the metric could
+# lie: it is printed ONLY with `--prev` (a single-ledger recount is byte for
+# byte what it was); its lens prefixes come from the header's machine-form
+# `Lenses:` lines and never from the id prefixes in the table; and a figure
+# that cannot be computed is `n/a: <reason>`, never `0` — an absent `shelf:`
+# tag means the tag was never set, which is not a share of zero. The rate
+# never fires alone either: the printed warning says so in words, because
+# the pairing is the rule itself, not a detail beside it.
+
+SUSTAINED = "per-lens sustained rate"
+SHELF_BASELINE = "BELOW THE 92% BASELINE"
+
+
+def refuted(rid: str, verdict: str = "verdict") -> str:
+    """One terminal, REFUTED row — the shelf tag's only legitimate home."""
+    return (f"| {rid} | minor | claim | {verdict} | — | fix | x | "
+            f"refuted-with-reason |")
+
+
+def test_no_prev_prints_no_sustained_rate_at_all(run, ledger):
+    """The compatibility promise: the block belongs to `--prev` and nowhere else."""
+    res = run(SCRIPT, ledger(raised("AA-1"), preamble=lens_field("AA")))
+    assert res.returncode == 0, res.stdout
+    assert SUSTAINED not in res.stdout
+    assert "shelf" not in res.stdout
+
+
+def test_prev_prints_the_rate_with_the_shelf_share_beside_it(run, ledger):
+    """The DoD case: two rows carry `shelf:`, and the share stands beside the rate."""
+    rows = "\n".join([
+        raised("AA-1"),
+        refuted("AA-2", "refuted; shelf:ng-2"),
+        refuted("AA-3", "refuted; shelf:ng-2"),
+        refuted("AA-4"),
+    ])
+    cur = ledger(rows, preamble=lens_field("AA"), name="cur.md")
+    prev = ledger(raised("AA-9"), preamble=lens_field("AA"), name="prev.md")
+    res = run(SCRIPT, cur, "--prev", prev)
+    assert res.returncode == 0, res.stdout
+    assert "AA: sustained 2/5 = 40.0% | shelf 2/3 = 66.7%" in res.stdout
+
+
+def test_a_window_with_no_shelf_tag_says_n_a_and_never_zero(run, ledger):
+    """The rule of the missing number, asserted where it is easiest to break."""
+    rows = "\n".join([raised("AA-1"), refuted("AA-2")])
+    cur = ledger(rows, preamble=lens_field("AA"), name="cur.md")
+    prev = ledger(raised("AA-9"), preamble=lens_field("AA"), name="prev.md")
+    res = run(SCRIPT, cur, "--prev", prev)
+    assert res.returncode == 0, res.stdout
+    assert "shelf n/a: no `shelf:` tag anywhere in the window" in res.stdout
+    assert "shelf 0/" not in res.stdout
+
+
+def test_a_lens_with_no_refutation_has_no_shelf_denominator(run, ledger):
+    rows = "\n".join([raised("AA-1"), refuted("BB-1", "refuted; shelf:ng-2")])
+    cur = ledger(rows, preamble=lens_field("AA", "BB"), name="cur.md")
+    prev = ledger(raised("AA-9"), preamble=lens_field("AA", "BB"), name="prev.md")
+    res = run(SCRIPT, cur, "--prev", prev)
+    assert res.returncode == 0, res.stdout
+    assert "AA: sustained 2/2 = 100.0% | shelf n/a: no refutation" in res.stdout
+
+
+def test_a_declared_lens_that_raised_nothing_is_n_a_not_zero(run, ledger):
+    cur = ledger(raised("AA-1"), preamble=lens_field("AA", "ZZ"), name="cur.md")
+    prev = ledger(raised("AA-9"), preamble=lens_field("AA", "ZZ"), name="prev.md")
+    res = run(SCRIPT, cur, "--prev", prev)
+    assert res.returncode == 0, res.stdout
+    assert "ZZ: n/a: no rows raised under this prefix in the window" in res.stdout
+
+
+def test_the_below_baseline_warning_names_the_paired_condition(run, ledger):
+    """The tightening is never assigned on the sustained rate alone."""
+    rows = "\n".join([raised("AA-1"), refuted("AA-2"), refuted("AA-3")])
+    cur = ledger(rows, preamble=lens_field("AA"), name="cur.md")
+    prev = ledger(refuted("AA-9"), preamble=lens_field("AA"), name="prev.md")
+    res = run(SCRIPT, cur, "--prev", prev)
+    assert res.returncode == 0, res.stdout
+    assert SHELF_BASELINE in res.stdout
+    assert "TIGHTENS this lens's framing rather than dropping the lens" in res.stdout
+    assert "the rate alone is never the trigger" in res.stdout
+
+
+def test_a_lens_at_or_above_the_baseline_gets_no_warning(run, ledger):
+    cur = ledger(raised("AA-1"), preamble=lens_field("AA"), name="cur.md")
+    prev = ledger(raised("AA-9"), preamble=lens_field("AA"), name="prev.md")
+    res = run(SCRIPT, cur, "--prev", prev)
+    assert res.returncode == 0, res.stdout
+    assert "AA: sustained 2/2 = 100.0%" in res.stdout
+    assert SHELF_BASELINE not in res.stdout
+
+
+def test_a_header_declaring_no_lenses_refuses_to_guess_the_prefixes(run, ledger):
+    """The same single source as `k`: never the id prefixes of the table."""
+    cur = ledger(raised("AA-1"), name="cur.md")
+    prev = ledger(raised("AA-9"), name="prev.md")
+    res = run(SCRIPT, cur, "--prev", prev)
+    assert res.returncode == 0, res.stdout
+    assert f"{SUSTAINED}: n/a: no machine-form `Lenses:` lines" in res.stdout
+    assert "AA: sustained" not in res.stdout
+
+
+def test_a_seven_cell_ledger_in_the_window_stops_the_split(run, ledger):
+    """Upheld/refuted needs the criterion column, exactly as the split line does."""
+    cur = ledger(raised("AA-1"), preamble=lens_field("AA"), name="cur.md")
+    prev = ledger("| AA-9 | major | claim | verdict | fix | LANDED | "
+                  "verified-landed |",
+                  header=HEADER_7, preamble=lens_field("AA"), name="prev.md")
+    res = run(SCRIPT, cur, "--prev", prev)
+    assert res.returncode == 0, res.stdout
+    assert f"{SUSTAINED}: n/a: a v1 (7-cell) ledger in the window" in res.stdout
+
+
+def test_the_rate_never_reaches_an_exit_code(run, ledger):
+    """Report-only, like the two metrics above it: an open row still rules."""
+    rows = "\n".join([refuted("AA-1"), OPEN])
+    cur = ledger(rows, preamble=lens_field("AA"), name="cur.md")
+    prev = ledger(refuted("AA-9"), preamble=lens_field("AA"), name="prev.md")
+    res = run(SCRIPT, cur, "--prev", prev)
+    assert res.returncode == 1, res.stdout
+    assert SHELF_BASELINE in res.stdout
+    assert "ROUND NOT CLOSABLE: 1 open rows." in res.stdout
+
+
+# --- the `shelf:` tag's own boundary ---------------------------------------
+
+
+def test_a_malformed_shelf_slug_is_a_structural_error(run, ledger):
+    """Fail-closed, exactly like `class:`: a guessed boundary is no boundary."""
+    res = run(SCRIPT, ledger(refuted("AA-1", "refuted; shelf:NG2")))
+    assert res.returncode == 2, res.stdout
+    assert "carries a `shelf:` tag whose slug is not 1-32 characters" in res.stdout
+
+
+@pytest.mark.parametrize("verdict", [
+    "refuted; the shelf: it was pre-signed",
+    "refuted; shelf:",
+])
+def test_shelf_followed_by_whitespace_or_the_cell_end_is_prose(run, ledger, verdict):
+    """The compatibility exception the `class:` tag already carries."""
+    res = run(SCRIPT, ledger(refuted("AA-1", verdict)))
+    assert res.returncode == 0, res.stdout
+    assert "shelf:" not in res.stdout
+
+
+def test_an_over_long_shelf_slug_is_refused(run, ledger):
+    res = run(SCRIPT, ledger(refuted("AA-1", "refuted; shelf:" + "a" * 33)))
+    assert res.returncode == 2, res.stdout
+    assert "carries a `shelf:` tag" in res.stdout
+
+
+def test_the_shelf_tag_changes_no_count_on_a_single_ledger_recount(run, ledger):
+    """The tag is read by ONE report, and that report lives under `--prev`."""
+    plain = run(SCRIPT, ledger(refuted("AA-1"), name="plain.md"))
+    tagged = run(SCRIPT, ledger(refuted("AA-1", "verdict; shelf:ng-2"),
+                                name="tagged.md"))
+    assert plain.returncode == tagged.returncode == 0
+    assert plain.stdout == tagged.stdout
+
+
+# --- 0.3.0 zones: the v3 row, its zone cell and the Z3 closing act ----------
+# The zone column is inserted THIRD so that every cell the script addresses
+# from the END of the row keeps its address. What these tests pin is that
+# claim (`criterion` read as the fourth cell from the end at width 8 and 9
+# alike), the one rule the zone cell feeds (`logged-no-action` at Z3 only),
+# the third bucket's own overdue report, and the header's schema declaration.
+# `tests/run-regression.sh` c66-c75 covers the same ground end to end; these
+# add the line formats and the edges the shell suite does not reach.
+
+V3_CLOSED = ("| DA-1 | major | Z2 | claim | verdict | crit | fix | LANDED | "
+             "verified-landed |")
+V3_LOGGED = ("| DA-2 | minor | Z3 | claim | logged, no action | crit | fix | "
+             "x | logged-no-action |")
+
+
+def test_a_nine_cell_ledger_recounts(run, ledger):
+    res = run(SCRIPT, ledger(V3_CLOSED, header=HEADER_9))
+    assert res.returncode == 0, res.stdout
+    assert "rows: 1 | terminal: 1 | non-terminal: 0" in res.stdout
+    assert "ROUND CLOSABLE" in res.stdout
+
+
+def test_the_criterion_is_the_fourth_cell_from_the_end_at_width_nine(
+        run, ledger):
+    """The whole point of inserting `zone` third.
+
+    A hard `cells[4]` would read the VERDICT prose here — non-empty, so the
+    consistency check would pass silently and never fire. Reading from the
+    end finds the empty criterion and fails closed.
+    """
+    row = ("| DA-1 | major | Z2 | claim | upheld — the wording is ambiguous "
+           "|  | fix | LANDED | verified-landed |")
+    res = run(SCRIPT, ledger(row, header=HEADER_9))
+    assert res.returncode == 2, res.stdout
+    assert "readiness-criterion cell is ''" in res.stdout
+
+
+def test_the_same_row_with_a_criterion_passes(run, ledger):
+    """The pair of the test above: only the criterion cell differs."""
+    row = ("| DA-1 | major | Z2 | claim | upheld — the wording is ambiguous "
+           "| grep -c TODO = 0 | fix | LANDED | verified-landed |")
+    res = run(SCRIPT, ledger(row, header=HEADER_9))
+    assert res.returncode == 0, res.stdout
+
+
+def test_the_upheld_split_is_computed_for_a_v3_ledger(run, ledger):
+    """A v3 row HAS a criterion cell, so the split is not `n/a` for it."""
+    res = run(SCRIPT, ledger(V3_CLOSED + "\n" + V3_LOGGED, header=HEADER_9))
+    assert res.returncode == 0, res.stdout
+    assert "upheld/refuted: 2 upheld, 0 refuted" in res.stdout
+
+
+def test_logged_no_action_is_terminal_at_zone_z3(run, ledger):
+    res = run(SCRIPT, ledger(V3_LOGGED, header=HEADER_9))
+    assert res.returncode == 0, res.stdout
+    assert "rows: 1 | terminal: 1 | non-terminal: 0" in res.stdout
+
+
+@pytest.mark.parametrize("zone", ["Z1", "Z2", "", "z3 (probably)"])
+def test_logged_no_action_outside_z3_is_structural(run, ledger, zone):
+    res = run(SCRIPT, ledger(V3_LOGGED.replace("| Z3 |", f"| {zone} |"),
+                             header=HEADER_9))
+    assert res.returncode == 2, res.stdout
+    assert "the status is accepted at zone Z3 alone" in res.stdout
+
+
+def test_a_lower_case_zone_still_names_the_zone(run, ledger):
+    """The literal is matched case-insensitively; nothing else is normalized."""
+    res = run(SCRIPT, ledger(V3_LOGGED.replace("| Z3 |", "| z3 |"),
+                             header=HEADER_9))
+    assert res.returncode == 0, res.stdout
+
+
+@pytest.mark.parametrize(("header", "row"), [
+    (HEADER_7, "| DA-1 | minor | c | v | f | x | logged-no-action |"),
+    (HEADER_8, "| DA-1 | minor | c | v | crit | f | x | logged-no-action |"),
+])
+def test_logged_no_action_in_an_older_schema_is_structural(
+        run, ledger, header, row):
+    """No `zone` cell exists there, so the condition has nothing to read.
+
+    Silence would be worse than an error: a mass closure route accepted on
+    no condition at all is exactly what the zone was introduced to prevent.
+    """
+    res = run(SCRIPT, ledger(row, header=header))
+    assert res.returncode == 2, res.stdout
+    assert "the status exists only in the 9-cell (v3) schema" in res.stdout
+
+
+def test_logged_no_action_on_a_security_row_needs_a_live_signature(
+        run, ledger):
+    """B5.3's exception, word for word, on the other pre-signed route."""
+    row = ("| SE-1 | minor | Z3 | claim | upheld class:security-pii | crit | "
+           "fix | x | logged-no-action |")
+    res = run(SCRIPT, ledger(row, header=HEADER_9))
+    assert res.returncode == 2, res.stdout
+    assert "never closed inside a batch act" in res.stdout
+
+
+def test_a_signed_security_row_may_be_logged(run, ledger):
+    row = ("| SE-1 | minor | Z3 | claim | upheld class:security-pii | crit | "
+           "fix | x | logged-no-action user-signed 2026-08-29 |")
+    res = run(SCRIPT, ledger(row, header=HEADER_9))
+    assert res.returncode == 0, res.stdout
+
+
+def test_a_logged_row_is_not_reported_as_an_unidentifiable_batch(run, ledger):
+    """It was never handed to a fixer, exactly like the waits before it."""
+    res = run(SCRIPT, ledger(V3_LOGGED.replace("| fix |", "|  |"),
+                             header=HEADER_9))
+    assert res.returncode == 0, res.stdout
+    assert "batch not identifiable" not in res.stdout
+
+
+# --- the wait, its date and the 30-day limit -------------------------------
+
+def wait_row(listed: str = "2026-08-29") -> str:
+    return ("| DA-2 | minor | Z3 | claim | logged | crit | fix | x | "
+            f"awaiting-logged-no-action (listed {listed}) |")
+
+
+def test_the_wait_carries_its_listed_date(run, ledger):
+    from datetime import UTC, datetime
+    today = datetime.now(UTC).date().isoformat()
+    res = run(SCRIPT, ledger(V3_CLOSED + "\n" + wait_row(today),
+                             header=HEADER_9))
+    assert res.returncode == 1, res.stdout
+    assert "awaiting-logged-no-action ids: DA-2" in res.stdout
+    assert "ROUND AWAITING Z3 CLOSURE: 1 rows await the owner's act." in res.stdout
+    assert "Z3 CLOSURE OVERDUE" not in res.stdout
+
+
+def test_a_wait_past_thirty_days_is_reported_overdue(run, ledger):
+    res = run(SCRIPT, ledger(V3_CLOSED + "\n" + wait_row("2020-01-01"),
+                             header=HEADER_9))
+    assert res.returncode == 1, res.stdout
+    assert "Z3 CLOSURE OVERDUE: DA-2 (listed 2020-01-01" in res.stdout
+    assert "A permanent wait is banned." in res.stdout
+    assert "ROUND AWAITING Z3 CLOSURE" in res.stdout
+
+
+@pytest.mark.parametrize("cell", [
+    "awaiting-logged-no-action",
+    "awaiting-logged-no-action (listed 2026-02-30)",
+])
+def test_an_unageable_wait_is_still_the_wait_but_is_reported(run, ledger, cell):
+    """The owner's act drains the queue whether or not the date reads.
+
+    Demoting the row to an ordinary open one would change what the 0.3.0
+    B1 batch shipped; saying nothing would hide a wait nobody can chase.
+    """
+    row = ("| DA-2 | minor | Z3 | claim | logged | crit | fix | x | "
+           f"{cell} |")
+    res = run(SCRIPT, ledger(V3_CLOSED + "\n" + row, header=HEADER_9))
+    assert res.returncode == 1, res.stdout
+    assert "awaiting-logged-no-action ids: DA-2" in res.stdout
+    assert "ROUND AWAITING Z3 CLOSURE" in res.stdout
+    assert "CONSISTENCY: DA-2" in res.stdout
+    assert "Z3 CLOSURE OVERDUE" not in res.stdout
+
+
+# --- the header's row-schema declaration -----------------------------------
+
+V1_CLOSED = "| DA-1 | major | claim | verdict | fix | LANDED | verified-landed |"
+
+
+@pytest.mark.parametrize(("declared", "header", "row"), [
+    ("v1", HEADER_7, V1_CLOSED),
+    ("v2", HEADER_8, CLOSED),
+    ("v3", HEADER_9, V3_CLOSED),
+    ("V3", HEADER_9, V3_CLOSED),
+])
+def test_a_declaration_that_matches_the_table_changes_nothing(
+        run, ledger, declared, header, row):
+    res = run(SCRIPT, ledger(row, header=header,
+                             preamble=f"- Row schema: {declared}\n"))
+    assert res.returncode == 0, res.stdout
+
+
+def test_a_declaration_contradicting_the_table_is_structural(run, ledger):
+    res = run(SCRIPT, ledger(V3_CLOSED, header=HEADER_9,
+                             preamble="- Row schema: v2\n"))
+    assert res.returncode == 2, res.stdout
+    assert "declares 8 cells but the findings header has 9" in res.stdout
+
+
+def test_an_unknown_schema_name_is_structural(run, ledger):
+    res = run(SCRIPT, ledger(V3_CLOSED, header=HEADER_9,
+                             preamble="- Row schema: latest\n"))
+    assert res.returncode == 2, res.stdout
+    assert "is not one of v1/v2/v3" in res.stdout
+
+
+def test_two_schema_declarations_are_structural(run, ledger):
+    res = run(SCRIPT, ledger(V3_CLOSED, header=HEADER_9,
+                             preamble="- Row schema: v3\n- Row schema: v3\n"))
+    assert res.returncode == 2, res.stdout
+    assert "`Row schema:` header fields" in res.stdout
+
+
+def test_a_ledger_without_the_field_recounts_as_before(run, ledger):
+    """Absence is silence: the width still comes from the table's header."""
+    without = run(SCRIPT, ledger(CLOSED, name="without.md"))
+    withit = run(SCRIPT, ledger(CLOSED, preamble="- Row schema: v2\n",
+                                name="with.md"))
+    assert without.returncode == withit.returncode == 0
+    assert without.stdout == withit.stdout
+
+# --- the class-kill gate's verified cell (R-T9(b)) ---------------------------
+#
+# `gates/<K-id>.sh` is the file form of a class-kill row, and the outcome of
+# running it is written into that row's `verified` cell. The literal is
+# AGREED with this script's contract rather than invented, and the case
+# below asserts the collision that decided it.
+
+GATE_ROW = (
+    "| K-1 | major | claim | upheld class-kill:stale-anchor | crit | B3 "
+    "| {verified} | verified-landed |"
+)
+
+
+def test_the_gate_literal_fits_the_contract_and_a_bare_gate_ok_does_not(
+        run, ledger):
+    """`LANDED — gate K-1.sh OK` closes the gate's row; `GATE OK` does not.
+
+    A `verified-landed` row wants the substring LANDED in its `verified`
+    cell, so a bare `GATE OK` would leave the gate's own row non-terminal
+    and the round unclosable on the very thing that killed the class. Both
+    forms of the convention — the passing one and `NOT LANDED — gate
+    K-1.sh FAIL` — are read by this contract as it stands, which is what
+    the collision below shows.
+    """
+    ok = run(SCRIPT, ledger(GATE_ROW.format(verified="LANDED — gate K-1.sh OK")))
+    assert ok.returncode == 0, ok.stdout
+    assert "rows: 1 | terminal: 1 | non-terminal: 0" in ok.stdout
+
+    bare = run(SCRIPT, ledger(GATE_ROW.format(verified="GATE OK")))
+    assert bare.returncode == 1, bare.stdout
+    assert "verified cell carries no LANDED verdict" in bare.stdout
+    assert "non-terminal ids: K-1" in bare.stdout
+
+    failed = run(
+        SCRIPT, ledger(GATE_ROW.format(verified="NOT LANDED — gate K-1.sh FAIL")))
+    assert failed.returncode == 1, failed.stdout
+    assert "non-terminal ids: K-1" in failed.stdout

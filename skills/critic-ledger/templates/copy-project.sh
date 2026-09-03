@@ -14,6 +14,12 @@
 #                   necessarily brings `.git` along; without
 #                   --with-git-history it is removed from the copy again and
 #                   listed as `EXCLUDED:`, as in steps 2-3.
+#                   The clone runs ONLY when git reports no ignored content
+#                   under --src. It copies everything on disk while steps 2-3
+#                   copy what git knows, so on a tree that mixes the project
+#                   with ignored runtime state it would WIDEN the copy in
+#                   silence. That pre-flight gate is fail-closed and has no
+#                   opt-out.
 #   STEP2-FILELIST  fallback when the clone is impossible: copy the files git
 #                   knows about (tracked + untracked-not-ignored); `.git`
 #                   itself only with --with-git-history.
@@ -30,9 +36,11 @@
 # removed from the copy and listed as `EXCLUDED:`.
 #
 # ONE copy per invocation. How many copies a round makes is the orchestrator's
-# call — one clone per critic when cloning is available, one shared copy
-# otherwise, with the number of simultaneous clones equal to the agent budget,
-# at most 12 — and this script neither counts nor enforces that budget.
+# call — one clone per critic when cloning is available AND the step-1
+# pre-flight allows it, one shared copy otherwise (the ordinary case on a real
+# repository, which almost always carries ignored content), with the number of
+# simultaneous clones equal to the agent budget, at most 12 — and this script
+# neither counts nor enforces that budget.
 #
 # Usage:
 #   copy-project.sh --src <project root> --dest <scratchpad run dir>
@@ -42,9 +50,15 @@
 #   --src           absolute path of the project under review (a git work tree)
 #   --dest          absolute path of the scratchpad run directory. NO DEFAULT:
 #                   the scratchpad root is passed in by the orchestrator, an
-#                   environment variable is never the source.
-#   --run-id        run identifier written to the manifest; defaults to the
-#                   basename of --dest.
+#                   environment variable is never the source. cleanup-scratchpad.py
+#                   refuses (its condition 4) to remove a run directory fewer
+#                   than 3 levels below the scratchpad root, so the run
+#                   directory is placed deeper than that.
+#   --run-id        run identifier written to the manifest. It MUST equal the
+#                   basename of --dest and defaults to it: cleanup-scratchpad.py
+#                   compares the two (its condition 7), so a divergent id — a
+#                   lens suffix, say — makes the copy unremovable by the
+#                   cleanup script. A divergence is refused here.
 #
 # Exit: 0 copy made; 2 bad arguments / refused precondition; 3 all steps failed.
 # Stdout: STEP<n>-<NAME>, DURATION-SEC, DF-BEFORE/DF-AFTER, EXCLUDED:, NOTICE:.
@@ -154,7 +168,19 @@ else
   OBJECT_REL=
 fi
 
-[ -n "$RUN_ID" ] || RUN_ID=$(basename "$DEST_R")
+# The manifest's run_id is what cleanup-scratchpad.py compares against the
+# basename of the directory it is asked to remove (its condition 7). An id that
+# differs from that basename — a lens suffix appended to the run id, as
+# happened in the field — leaves a copy the cleanup script refuses to remove
+# unless every later caller remembers to repeat the id by hand. The divergence
+# is refused at copy time instead of being discovered at teardown.
+DEST_BASE=$(basename "$DEST_R")
+if [ -n "$RUN_ID" ]; then
+  [ "$RUN_ID" = "$DEST_BASE" ] ||
+    die "--run-id must equal the basename of --dest ('$DEST_BASE'), got '$RUN_ID': cleanup-scratchpad.py compares the two (condition 7) and would refuse to remove this copy"
+else
+  RUN_ID=$DEST_BASE
+fi
 
 # ------------------------------------------------------------------- set-up --
 umask 077                       # run dir and manifest: owner of the process only
@@ -172,8 +198,60 @@ DF_BEFORE=$(df -m "$DEST_R" | tail -n 1)
 reset_dest() {
   depth=$(printf '%s' "$DEST_R" | tr -cd '/' | wc -c | tr -d ' ')
   [ "$depth" -ge 2 ] || die "refusing to reset a top-level --dest: $DEST_R"
+  # The copy is being destroyed whole, so restoring write permission across it
+  # is safe here in a way it is not while a copy is being KEPT: a clone brings
+  # the source's modes along, and a read-only directory inside the copy would
+  # otherwise leave a half-emptied destination behind.
+  chmod -R u+w "$DEST_R" 2>/dev/null
   find "$DEST_R" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null
 }
+
+# ----------------------------------------------------------- excluded list ----
+# Every omission from the copy, one `<path> | class=<class>` line. The step-1
+# pre-flight below is its earliest writer. `reset_excluded` re-seeds the list
+# after a step's copy is discarded: the pre-flight lines describe --src and
+# survive that, everything a discarded step contributed does not.
+EXCLUDED_LIST="$TMPD/excluded.txt"
+PREFLIGHT_LIST="$TMPD/preflight.txt"
+: >"$PREFLIGHT_LIST"
+reset_excluded() { cat "$PREFLIGHT_LIST" >"$EXCLUDED_LIST"; }
+reset_excluded
+
+# --------------------------------------- step 1 pre-flight: scope of the copy --
+# Step 1 and steps 2-3 do not mean the same thing by "the project": the strict
+# clone takes EVERYTHING under --src, steps 2-3 take what git knows. On a tree
+# where the project is mixed with ignored runtime state the clone WIDENS the
+# copy in silence — the disclosure sweep further down removes only
+# secret-class paths, so private-but-not-secret state would reach the critics
+# unannounced. The clone therefore runs only when git reports no ignored
+# content at all; the predicate is exact by construction, being the same source
+# of truth step 2 defines the project by.
+#
+# Fail-closed on BOTH conditions, not one: non-empty output, OR a non-zero exit
+# code. Empty stdout with a non-zero code is a refusal, never "nothing is
+# ignored" (there is no `set -e` here, so the code is checked explicitly, as
+# for every other git call in this script). No opt-out flag is offered on
+# purpose: an opt-out would be reached for out of habit and the gate would be
+# decorative.
+PREFLIGHT_OK=1
+git -C "$SRC_R" ls-files -z --others --ignored --exclude-standard --directory \
+  >"$TMPD/ignored.z" 2>"$TMPD/ignored.err"
+PREFLIGHT_RC=$?
+if [ "$PREFLIGHT_RC" -ne 0 ]; then
+  PREFLIGHT_OK=0
+  note "step 1 (strict clone) not run: the git pre-flight failed (exit $PREFLIGHT_RC): $(tr '\n' ' ' <"$TMPD/ignored.err")"
+  printf 'git pre-flight | class=git-preflight-failed (git ls-files --ignored exit %s)\n' \
+    "$PREFLIGHT_RC" >>"$PREFLIGHT_LIST"
+elif [ -s "$TMPD/ignored.z" ]; then
+  PREFLIGHT_OK=0
+  tr '\0' '\n' <"$TMPD/ignored.z" >"$TMPD/ignored.txt"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    printf '%s | class=git-ignored\n' "$p" >>"$PREFLIGHT_LIST"
+  done <"$TMPD/ignored.txt"
+  note "step 1 (strict clone) not run: --src carries git-ignored content ($(wc -l <"$TMPD/ignored.txt" | tr -d ' ') top-level entries listed as EXCLUDED); the copy is built from the git-known file list instead"
+fi
+reset_excluded
 
 # ------------------------------------------------------ step 1: strict clone --
 STEP=
@@ -181,11 +259,13 @@ OS=$(uname -s)
 CLONE_RC=1
 CLONE_GIT_EXCLUDED=0
 : >"$TMPD/cp.err"
-case "$OS" in
-  Darwin) cp -Rc "$SRC_R/." "$DEST_R" >"$TMPD/cp.err" 2>&1; CLONE_RC=$? ;;
-  Linux)  cp -R --reflink=always -T "$SRC_R" "$DEST_R" >"$TMPD/cp.err" 2>&1; CLONE_RC=$? ;;
-  *)      printf 'no strict clone mode known for %s\n' "$OS" >"$TMPD/cp.err"; CLONE_RC=1 ;;
-esac
+if [ "$PREFLIGHT_OK" -eq 1 ]; then
+  case "$OS" in
+    Darwin) cp -Rc "$SRC_R/." "$DEST_R" >"$TMPD/cp.err" 2>&1; CLONE_RC=$? ;;
+    Linux)  cp -R --reflink=always -T "$SRC_R" "$DEST_R" >"$TMPD/cp.err" 2>&1; CLONE_RC=$? ;;
+    *)      printf 'no strict clone mode known for %s\n' "$OS" >"$TMPD/cp.err"; CLONE_RC=1 ;;
+  esac
+fi
 
 if [ "$CLONE_RC" -eq 0 ]; then
   STEP=STEP1-CLONE
@@ -200,7 +280,7 @@ if [ "$CLONE_RC" -eq 0 ]; then
     rm -rf -- "$DEST_R/.git" || die "cannot remove .git from the copy: $DEST_R/.git"
     CLONE_GIT_EXCLUDED=1
   fi
-else
+elif [ "$PREFLIGHT_OK" -eq 1 ]; then
   note "strict clone unavailable (cp exit $CLONE_RC): $(tr '\n' ' ' <"$TMPD/cp.err")"
   reset_dest
 fi
@@ -232,8 +312,7 @@ is_object() { # <relative path>
 # Builds "$TMPD/list.txt": newline-separated paths relative to $SRC_R, tracked
 # plus untracked-not-ignored, minus deleted-from-the-worktree, minus
 # secret-class files. Refuses (rather than mishandles) filenames with newlines.
-EXCLUDED_LIST="$TMPD/excluded.txt"
-: >"$EXCLUDED_LIST"
+# `$EXCLUDED_LIST` itself is created before step 1, which already writes to it.
 
 # Step 1 removed the .git it had cloned (no lens asked for the history): record
 # it in the same class wording steps 2-3 use.
@@ -301,7 +380,7 @@ if [ -z "$STEP" ]; then
   else
     note "step 2 (git file list) did not fit"
     reset_dest
-    : >"$EXCLUDED_LIST"
+    reset_excluded
   fi
 fi
 
@@ -359,7 +438,16 @@ while IFS= read -r hit; do
     note "kept $rel: it is the object under check, secret-class exclusion not applied"
     continue
   fi
-  rm -rf -- "$hit" || die "cannot remove $rel from the copy"
+  # A refusal here is not a `die`: `die` would leave a HALF-cleaned copy on
+  # disk, with the secret still readable in it and no manifest by which
+  # cleanup-scratchpad.py could find it. Restore write permission on what is
+  # being removed and retry once; if it still refuses, the copy cannot be
+  # trusted at all — destroy it whole and report "no copy was made" (exit 3).
+  if ! rm -rf -- "$hit" 2>/dev/null; then
+    chmod -R u+w "$hit" 2>/dev/null
+    rm -rf -- "$hit" 2>/dev/null ||
+      fail_copy "cannot remove $rel from the copy even after chmod -R u+w; the copy would keep a secret-class path"
+  fi
   printf '%s | class=%s\n' "$rel" "$cls" >>"$EXCLUDED_LIST"
 done <"$TMPD/hits.txt"
 

@@ -1,10 +1,11 @@
 """Shared fixtures for the CLI characterization suite.
 
-The suite pins the CURRENT observable behavior of the six standalone,
-stdlib-only CLI scripts that ship under `skills/critic-ledger/templates/`.
-Every script is exercised through a real subprocess call, because argv,
-stdout/stderr, exit codes and filesystem effects are the contract those
-scripts publish.
+The suite pins the CURRENT observable behavior of the seven standalone,
+stdlib-only CLI scripts that ship under `skills/critic-ledger/templates/`,
+plus the one shipped POSIX-shell script (`copy-project.sh`, driven through
+`sh` by the `run_sh` fixture). Every script is exercised through a real
+subprocess call, because argv, stdout/stderr, exit codes and filesystem
+effects are the contract those scripts publish.
 
 The directory holding the scripts under test is resolved once, from the
 `CRITIC_LEDGER_SCRIPTS_DIR` environment variable, and falls back to the
@@ -42,9 +43,22 @@ SCRIPT_NAMES = (
     "cleanup-scratchpad.py",
     "deleted-lines.py",
     "recount.py",
+    "set-cell.py",
     "transcribe.py",
     "validate-report.py",
 )
+
+# Shipped scripts that are POSIX shell rather than Python. They are driven
+# through `sh` by the `run_sh` fixture, never through the interpreter.
+SHELL_SCRIPT_NAMES = ("copy-project.sh",)
+
+# The two shipped scripts this conftest CHECKS FOR but never runs: their own
+# modules (`test_trace.py`, `test_rollup.py`) drive them through a private
+# subprocess helper rather than through the `run` fixture, and `SCRIPT_NAMES`
+# is that fixture's execution whitelist. They are named separately so that
+# the presence check below covers all ten shipped scripts while the whitelist
+# — and what those two modules say about it — stays exactly as it was.
+CHECKED_ONLY_NAMES = ("trace.py", "rollup.py")
 
 MANIFEST_NAME = "critic-ledger-manifest.json"
 MANIFEST_VERSION = "critic-ledger/scratchpad-manifest@1"
@@ -87,7 +101,11 @@ def scripts_dir() -> Path:
     if not directory.is_dir():
         pytest.fail(f"scripts directory does not exist: {directory} "
                     f"(set {SCRIPTS_DIR_ENV} to override)")
-    missing = [n for n in SCRIPT_NAMES if not (directory / n).is_file()]
+    missing = [
+        n
+        for n in (*SCRIPT_NAMES, *SHELL_SCRIPT_NAMES, *CHECKED_ONLY_NAMES)
+        if not (directory / n).is_file()
+    ]
     if missing:
         pytest.fail(f"scripts missing from {directory}: {', '.join(missing)}")
     return directory
@@ -116,6 +134,40 @@ def run(scripts_dir: Path, sandbox_home: Path, tmp_path: Path):
             cwd=str(cwd if cwd is not None else default_cwd),
             env=env,
             input=stdin,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            check=False,
+        )
+
+    return _run
+
+
+@pytest.fixture
+def run_sh(scripts_dir: Path, sandbox_home: Path, tmp_path: Path):
+    """Invoke one of the shipped SHELL scripts through `sh`.
+
+    `extra_path` prepends a directory to `PATH`, which is how a test injects
+    a stub for one of the external commands the script shells out to (git,
+    rm). The stub directory always lives inside `tmp_path`.
+    """
+    default_cwd = tmp_path / "cwd"
+    default_cwd.mkdir(exist_ok=True)
+
+    def _run(script: str, *args: object, cwd: Path | None = None,
+             extra_path: Path | None = None) -> subprocess.CompletedProcess[str]:
+        if script not in SHELL_SCRIPT_NAMES:
+            msg = f"unknown shell script {script!r}"
+            raise AssertionError(msg)
+        env = hardened_env(sandbox_home)
+        if extra_path is not None:
+            env["PATH"] = f"{extra_path}{os.pathsep}{env['PATH']}"
+        cmd = ["sh", str(scripts_dir / script), *map(str, args)]
+        return subprocess.run(  # noqa: S603 - fixed argv, no shell
+            cmd,
+            cwd=str(cwd if cwd is not None else default_cwd),
+            env=env,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -293,6 +345,13 @@ HEADER_7 = (
 HEADER_8 = (
     "| id | sev | claim | verdict | criterion | fix | verified | terminal |\n"
     "|---|---|---|---|---|---|---|---|\n"
+)
+# The v3 schema: `zone` inserted THIRD, so that `criterion`, `fix`,
+# `verified` and `terminal` keep their addresses from the END of the row.
+HEADER_9 = (
+    "| id | sev | zone | claim | verdict | criterion | fix | verified | "
+    "terminal |\n"
+    "|---|---|---|---|---|---|---|---|---|\n"
 )
 
 

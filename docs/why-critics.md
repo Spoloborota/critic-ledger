@@ -1,9 +1,20 @@
 # Why this discipline
 
-The reasoning behind the plugin: the failure it was derived from, what the
-numbers say, what is honestly unproven, and which defect forced which rule. The
+The reasoning behind the plugin: the failure it was derived from, what was
+observed, what is honestly unproven, and which defect forced which rule. The
 *mechanics* live in
 [`../skills/critic-ledger/SKILL.md`](../skills/critic-ledger/SKILL.md).
+
+> **These numbers are provenance, not efficacy evidence.** They are the
+> observations the rules below were derived from — what was seen while the
+> discipline was being built, on the author's own documents, under the
+> PREVIOUS actor allocation (fixes applied by the judging session, not by a
+> separate fixer subagent). n = 2 on the counted pair, one object class,
+> self-reported counters with no external arbiter. They are recorded so each
+> rule can be traced to the defect that forced it, not offered as a measure
+> of how well the shipped discipline works. No external benchmark of it
+> exists; the README quotes no figures, and collecting that evidence is
+> planned rather than done.
 
 All measurements below are **self-reported counters from the author's private
 research — confidence grade C** (the scale: A — an external controlled study;
@@ -87,7 +98,7 @@ to Reduce Morbidity and Mortality in a Global Population*, NEJM 2009
 1.5% to 0.8%, complications 11.0% to 7.0%: the effect came not from the list but
 from phase-by-phase itemization read out by a *different* role.
 
-## 4. Proven and not proven
+## 4. What was observed, and what is not shown
 
 Keeping these two columns apart is the point. The five closed rounds, all grade C:
 
@@ -108,7 +119,7 @@ Keeping these two columns apart is the point. The five closed rounds, all grade 
   verified-landed, 3 refuted, 0 residue; 12 batches; 6 verification passes run
   by 8 fresh verifiers, none of whom applied a fix; **0 NOT LANDED**
 
-### Proven, within grade C (self-reported counters, no external arbiter):
+### Observed, within grade C (self-reported counters, no external arbiter):
 
 - ~47% against ~100% application completeness — an A/B in one session, same
   critics, four cases on the B side.
@@ -133,7 +144,7 @@ measurement here with an outside arbiter, taken on a review task of its own,
 not on this discipline's rounds. The rule "every verification pass is run by a
 fresh verifier" rests on it.
 
-### Not proven — and flagged as unproven in the primary sources themselves:
+### Not shown — and flagged as unproven in the primary sources themselves:
 
 - **n = 2, and both points are the same object class.** The counted pair is the
   first live run (a meta-plan) and the dogfood round (this plugin's skill
@@ -183,8 +194,8 @@ direction: remediation defects are a large share of what a later pass finds.
 
 **The actor-allocation change, in one sentence:** fixes used to be applied by
 the session that judged the findings; the shipped design moves fixing into a
-separate subagent. Both headline figures — the 16.6% corpus and the ~47%/~100%
-A/B — were taken under the old allocation and are not yet re-measured under the
+separate subagent. Both figures — the 16.6% corpus and the ~47%/~100% A/B —
+were taken under the old allocation and are not yet re-measured under the
 shipped one.
 
 ## 6. Delta provenance: which defect forced which rule

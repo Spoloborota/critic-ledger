@@ -1,7 +1,7 @@
 {
   "name": "critic-ledger",
   "displayName": "critic-ledger",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "An adversarial critic round on a plan or an implementation, driven to closure by a fix-ledger. Parallel read-only critics under distinct lenses, refute-by-default adjudication that fixes an acceptance criterion per finding, targeted fix batches, independent per-finding verification by a different actor, a convergence signal and a programmatic terminality recount. Critic, fixer and verifier are separate subagent roles with their own agent definitions and per-role models; the ledger and the verbatim critic and verifier reports land in a per-run folder inside the project under review. An expensive multi-agent procedure: use ONLY on explicit user request.",
   "keywords": [
     "critic",
@@ -21,8 +21,8 @@
     "observability": {
       "type": "boolean",
       "title": "Observability",
-      "description": "Measure the round's own cost: one span per unit of work in the run folder's trace.jsonl, plus a round-summary.json beside the ledger. Local files only, no free-text content, nothing sent anywhere. Off by default.",
-      "default": false
+      "description": "Measure the round's own cost: one span per unit of work in the run folder's trace.jsonl, plus a round-summary.json beside the ledger. Local files only, no free-text content, nothing sent anywhere. On by default; opting out is one line — set this switch to false here, or install with --config observability=false.",
+      "default": true
     }
   },
   "author": {

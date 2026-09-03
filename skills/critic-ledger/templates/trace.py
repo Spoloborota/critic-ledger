@@ -4,9 +4,9 @@
 # ///
 """Reference trace writer and validator for a critic-ledger round —
 the T1 carrier `.critic-ledger/<run>/trace.jsonl`, one JSON object per
-line, UTF-8, LF, APPEND-ONLY. Observability is optional and OFF by
-default; nothing here runs, and no file is created, unless the round
-switched it on.
+line, UTF-8, LF, APPEND-ONLY. Observability is optional and ON by
+default; nothing here runs, and no file is created, when the round
+switched it off.
 
 THIS SCRIPT NEVER FAILS CLOSED — its exit code is ALWAYS 0
 ----------------------------------------------------------
@@ -72,10 +72,13 @@ cannot be parsed or that the schema refuses. Then REPORT-ONLY defects
                                 the four counters
     id-tags-orphan              `id_tags` names an id absent from `ids`
 
-and a summary line. `tokens.total` is the one optional key in the schema:
-the four counters are fixed, the cross-check against the tool result's
-`totalTokens` is required, and that check needs the number on disk to be
-re-derivable. Records without it are accepted unchanged.
+and a summary line. Under `tokens_source: agent-tool-result-total` the
+`tokens` object carries `total` ALONE: the four counters never arrive
+from that delivery, so the cross-check does not apply. Under every
+other source the four counters are fixed and `tokens.total` is the one
+optional key — where it is present, the cross-check against the tool
+result's `totalTokens` is required, and that check needs the number on
+disk to be re-derivable. Records without it are accepted unchanged.
 
 Usage:  trace.py append <trace.jsonl> --kind open|span --round <run>
                 --span <s3.01> --actor <actor> --unit <unit> [options]
@@ -94,6 +97,9 @@ string mean JSON null where the field is nullable):
 `--stage` defaults to the stage named by the span id; `--parent` to the
 round span `s1.00` (and to null on `s1.00` itself); `--started` and
 `--ended` default to this script's own clock.
+A bare `--total-tokens` (no four counters) is written only alongside
+`--tokens-source agent-tool-result-total`; with the four counters
+present it stays the optional, cross-checked aggregate.
 
 Exit code: ALWAYS 0 — see the second section above.
 """  # noqa: D205  # printed usage text; reflowing it would change output
@@ -138,7 +144,16 @@ SPAWN_ACTORS = ("critic", "fixer", "verifier", "subagent-observed")
 NO_SPAWN_ACTORS = ("orchestrator", "script")
 
 MODEL_SOURCES = ("resolvedModel", "self-report", "n/a")
-TOKENS_SOURCES = ("agent-tool-result", "subagent-transcript", "absent")
+# The same completed `Agent` tool result, reporting its AGGREGATE alone:
+# where the result carries no four-counter breakdown, the `tokens` object
+# carries the single key `total` and nothing else.
+TOTAL_ONLY_SOURCE = "agent-tool-result-total"
+TOKENS_SOURCES = (
+    "agent-tool-result",
+    TOTAL_ONLY_SOURCE,
+    "subagent-transcript",
+    "absent",
+)
 FLAG_VOCABULARY = (
     "respawn",
     "dropped-lens",
@@ -165,10 +180,24 @@ SCRIPT_UNITS = (
 ORCHESTRATOR_UNITS = ("round", "scoping", "salvage", "closure")
 ORCHESTRATOR_BATCH_RE = re.compile(r"^adjudication-batch-\d{1,4}$")
 ORCHESTRATOR_STEP_OUTCOMES = ("scoped", "salvaged", "closed")
+# Waiting for the owner is an orchestrator UNIT, not a new actor: the
+# orchestrator writes the `open` when the question is put to the owner and
+# the close on the owner's word. The reason is a closed vocabulary and so
+# is the outcome; the longest name, `owner-wait-authorization`, is exactly
+# MAX_ORCHESTRATOR_UNIT_LEN characters, so a seventh reason is a length
+# decision as much as a vocabulary one.
+OWNER_WAIT_RE = re.compile(
+    r"^owner-wait-(signature|authorization|fork|amendment|ratification"
+    r"|z3-closure)$",
+)
+OWNER_WAIT_OUTCOMES = ("answered", "refused", "abandoned")
 
 ROUND_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{6}-[a-z0-9][a-z0-9-]{0,39}$")
 SPAN_RE = re.compile(r"^s[1-9]\.\d{2,4}$")
-FINDING_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*-\d+$")
+# The id contract of recount.py (its `ID_RE`), character for character: a
+# prefix of one or more letter-led segments joined by dashes, then `-<n>`,
+# so a span naming a composite id (`V-CIT-1`) is recorded, not refused.
+FINDING_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)*-\d+$")
 PREFIX_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,7}$")
 AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
@@ -200,7 +229,19 @@ MAX_ORCHESTRATOR_UNIT_LEN = 24
 # `outcome` per actor.
 OUTCOME_PATTERNS = {
     "critic": (re.compile(r"^(findings:\d{1,4}|dropped)$"), 16),
-    "fixer": (re.compile(r"^fixed:\d{1,4},unworkable:\d{1,4}$"), 32),
+    # The fixer has THREE per-id outcomes, and the third one is countable
+    # here: `notfound:<k>` carries `premise-not-found`. The two-part form is
+    # kept beside the three-part one rather than replaced — every trace of a
+    # closed round carries it, and those traces validate unchanged. The bound
+    # is 48 and not 32 because `bounded` cuts by LENGTH independently of the
+    # pattern: `fixed:10,unworkable:10,notfound:10` is 34 characters and the
+    # four-digit worst case is 40, so a 32 would reject a matching outcome.
+    "fixer": (
+        re.compile(
+            r"^fixed:\d{1,4},unworkable:\d{1,4}(?:,notfound:\d{1,4})?$",
+        ),
+        48,
+    ),
     "verifier": (re.compile(r"^L:\d{1,4},P:\d{1,4},NOT:\d{1,4},new:\d{1,4}$"), 48),
     "script": (
         re.compile(r"^(ok|error:(" + "|".join(ERROR_CLASSES) + r"))$"),
@@ -216,6 +257,14 @@ OUTCOME_PATTERNS = {
         32,
     ),
 }
+# The orchestrator's SECOND closed outcome form, selected by `unit` — never
+# merged into the entry above. A merged pattern would pass `scoped` on an
+# owner-wait span and `answered` on `scoping`, and the check would stop
+# telling the two units apart.
+OWNER_WAIT_OUTCOME = (
+    re.compile(r"^(" + "|".join(OWNER_WAIT_OUTCOMES) + r")$"),
+    16,
+)
 
 OPEN_REQUIRED = (
     "v",
@@ -375,15 +424,26 @@ def valid_unit(actor: str, value: object) -> bool:
         if len(text) > MAX_ORCHESTRATOR_UNIT_LEN:
             return False
         return (
-            text in ORCHESTRATOR_UNITS or ORCHESTRATOR_BATCH_RE.match(text) is not None
+            text in ORCHESTRATOR_UNITS
+            or ORCHESTRATOR_BATCH_RE.match(text) is not None
+            or OWNER_WAIT_RE.match(text) is not None
         )
     pattern, max_len = UNIT_PATTERNS[actor]
     return bounded(text, pattern, max_len)
 
 
-def valid_outcome(actor: str, value: object) -> bool:
-    """Check `outcome` against the closed pattern of its actor."""
-    pattern, max_len = OUTCOME_PATTERNS[actor]
+def valid_outcome(actor: str, value: object, unit: object) -> bool:
+    """Check `outcome` against the closed pattern of its actor and unit.
+
+    The orchestrator has TWO closed forms, and the unit selects between
+    them: an owner-wait span takes `OWNER_WAIT_OUTCOMES` and nothing else,
+    every other orchestrator unit takes the step/adjudication form and
+    nothing else. Every other actor keys on the actor alone.
+    """
+    if actor == "orchestrator" and OWNER_WAIT_RE.match(as_str(unit) or "") is not None:
+        pattern, max_len = OWNER_WAIT_OUTCOME
+    else:
+        pattern, max_len = OUTCOME_PATTERNS[actor]
     return bounded(value, pattern, max_len)
 
 
@@ -456,7 +516,13 @@ def valid_tokens(rec: dict[str, object], actor: str) -> bool:
     obj = as_object(tokens)
     if obj is None:
         return False
-    if set(obj) - {TOKEN_TOTAL_KEY} != set(TOKEN_KEYS):
+    if source == TOTAL_ONLY_SOURCE:
+        # One measured aggregate and no breakdown: `total` ALONE. The four
+        # counters never arrive from this delivery, so their form is not
+        # admitted for it — the source names what was measured.
+        if set(obj) != {TOKEN_TOTAL_KEY}:
+            return False
+    elif set(obj) - {TOKEN_TOTAL_KEY} != set(TOKEN_KEYS):
         return False
     for value in obj.values():
         number = as_int(value)
@@ -521,7 +587,7 @@ def valid_close(rec: dict[str, object], actor: str) -> bool:
     wallclock = as_int(rec.get("wallclock_s"))
     if wallclock is None or wallclock < 0:
         return False
-    if not valid_outcome(actor, rec.get("outcome")):
+    if not valid_outcome(actor, rec.get("outcome"), rec.get("unit")):
         return False
     return valid_observed_pairing(rec, actor)
 
@@ -595,8 +661,18 @@ def build_tokens(opt: dict[str, str]) -> tuple[dict[str, int] | None, bool]:
     """Build the `tokens` object from the counters; the flag reports success."""
     given = [k for k in COUNTER_OPTIONS if k in opt]
     if not given:
-        # A bare `--total-tokens` has no four counters to cross-check.
-        return None, "total_tokens" not in opt
+        if "total_tokens" not in opt:
+            return None, True
+        # A bare `--total-tokens` has no four counters to cross-check, so it
+        # is written ONLY under the source that names that delivery — the
+        # aggregate alone, in the one shape `valid_tokens` admits for it.
+        if opt.get("tokens_source") != TOTAL_ONLY_SOURCE:
+            return None, False
+        try:
+            total = int(opt["total_tokens"])
+        except ValueError:
+            return None, False
+        return {TOKEN_TOTAL_KEY: total}, True
     if len(given) != len(COUNTER_OPTIONS):
         # Zero is never a stand-in for a counter that was not captured.
         return None, False
@@ -788,6 +864,12 @@ def token_defect(rec: dict[str, object]) -> bool:
     """Report whether `tokens.total` disagrees with the four counters."""
     obj = as_object(rec.get("tokens"))
     if obj is None or TOKEN_TOTAL_KEY not in obj:
+        return False
+    if not set(TOKEN_KEYS) <= set(obj):
+        # The total-only form (`agent-tool-result-total`) carries no
+        # breakdown for the total to disagree with: nothing to cross-check,
+        # and indexing the absent counters here would raise on the very
+        # records the source admits.
         return False
     total = as_int(obj[TOKEN_TOTAL_KEY])
     counters = [as_int(obj[k]) for k in TOKEN_KEYS]

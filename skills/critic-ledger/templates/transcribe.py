@@ -14,8 +14,10 @@ losses and zero extras.
 Contract of a finding header line
 ---------------------------------
 - The accepted shape is the one mandated by templates/critic-prompt.md:
-  `<PREFIX>-<n> | severity | claim`, where PREFIX starts with a letter and
-  may contain letters and digits (`DA`, `GB`, `L1`).
+  `<PREFIX>-<n> | severity | claim`, where PREFIX is ONE OR MORE segments
+  joined by dashes, each segment letter-led and continuing with letters and
+  digits (`DA`, `GB`, `L1`, and the COMPOSITE `V-CIT` a verifier writes) —
+  the id contract of recount.py, not a second one.
 - Wrappers seen in real salvages are tolerated and stripped: leading
   spaces, blockquote markers, a markdown heading marker (`##`), and bold
   around the whole line (`**GB-1 | major | ...**`).
@@ -40,7 +42,7 @@ Contract of a finding header line
   STRUCTURAL ERROR naming file:line and the text. Nothing is written.
 - What "LOOKS like" means differs per separator, because the two carry
   different evidence. A PIPE line is always held to the contract, so
-  `XX-3 | критично | …` is an error rather than a guess. A DASH line
+  `XX-3 | urgent | …` is an error rather than a guess. A DASH line
   counts only when its SECOND field is a severity literal: `GB-1 —
   discussed above, high confidence.` is a coverage statement
   cross-referencing an id — the very convention adjudication uses — and
@@ -52,12 +54,30 @@ Contract of a finding header line
 
 Contract of the emitted row
 ---------------------------
-- Eight cells:
-  `| id | sev | claim | verdict | criterion | fix | verified | terminal |`.
-  Transcription fills the FIRST THREE only; the verdict and the readiness
-  criterion belong to adjudication (the main session), the rest to the fix
+- The row's WIDTH IS THE TARGET LEDGER'S, never a hard-wired literal. Three
+  schemas are in use — v1 (7 cells), v2 (8, with the readiness criterion)
+  and v3 (9, with the zone column third) — and a row of the wrong width is
+  a structural error of recount.py, so the form is CHOSEN, not assumed:
+    * the ledger header's `Row schema: v1 | v2 | v3` field decides it;
+    * with no such field the width is the cell count of the findings
+      table's own header (7, 8 or 9);
+    * with a field AND a header that disagree, nothing is written — a
+      declaration contradicting the table is never resolved by guessing;
+    * with neither readable, nothing is written either: emitting a row of
+      a foreign width is worse than emitting none.
+  In `--stdout` mode there is no ledger to ask, so the v2 form is printed
+  and the caller places it.
+- Filled cells are NAMED, not counted: `id`, `sev` and `claim` carry the
+  literal copy, and in v3 the `zone` cell carries the stub `·`. In v1 and
+  v2 those named cells are still the first three; in v3 they are not a
+  contiguous prefix any more, since the zone comes between `sev` and
+  `claim`. The zone is a JUDGMENT against the round contract's zone map and
+  belongs to the ADJUDICATOR at stage 6 — transcription stays literal
+  copying, so it leaves a visible stub rather than a guess. The verdict and
+  the readiness criterion belong to adjudication too, the rest to the fix
   and verification passes. Empty cells are deliberate: they are what makes
-  a freshly transcribed row non-terminal for recount.py.
+  a freshly transcribed row non-terminal for recount.py. The v3 row is
+  therefore exactly `| <id> | <sev> | · | <claim> | | | | | |`.
 - Rows are appended directly after the separator row of the FIRST findings
   table of the ledger (the table whose header's first cell is `id`), in
   the order the reports were given on the command line and, inside a
@@ -81,15 +101,31 @@ Exit codes: 0 = rows transcribed (or printed), or `-h`/`--help`;
 2 = structural error or usage error — nothing was written.
 """  # noqa: D205, D301  # printed usage text; reflow/r-string would change output
 
+import os
 import re
 import sys
 from pathlib import Path
 from typing import TypedDict, cast
 
 SEVERITIES = ("blocker", "major", "minor")
+# The three findings-table schemas, by cell count.
+V1_WIDTH = 7
+V2_WIDTH = 8
+V3_WIDTH = 9
+ROW_WIDTHS = (V1_WIDTH, V2_WIDTH, V3_WIDTH)
+# `--stdout` has no ledger to read a schema from; the caller places the row.
+DEFAULT_WIDTH = V2_WIDTH
+# The header field that declares the schema, and the width each name means.
+ROW_SCHEMA_RE = re.compile(r"^\s*[-*]?\s*row schema:\s*(.*?)\s*$", re.IGNORECASE)
+ROW_SCHEMA_WIDTHS = {"v1": V1_WIDTH, "v2": V2_WIDTH, "v3": V3_WIDTH}
+# The v3 zone column and the stub transcription leaves in it.
+ZONE_INDEX = 2
+ZONE_PLACEHOLDER = "·"
 SEP = r"|—–"  # pipe, em dash, en dash
 WRAP = r"^[\s>]*(?:\#{1,6}\s*)?(?P<bold>\*\*|__)?[ \t]*"
-ID = r"(?P<id>[A-Za-z][A-Za-z0-9]*-\d+)"
+# The id contract of recount.py (its `ID_RE`), character for character: a
+# prefix of one or more letter-led segments joined by dashes, then `-<n>`.
+ID = r"(?P<id>[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)*-\d+)"
 
 # A line that merely LOOKS like a finding header: the id shape followed by
 # a separator. Everything is_candidate() accepts must parse or the run fails.
@@ -130,7 +166,7 @@ def is_candidate(line: str) -> bool:
     """True when `line` must parse as a finding header or fail the run.
 
     A PIPE-separated id line is always a candidate: the canonical shape is
-    unambiguous, so `XX-3 | критично | …` is a structural error and not a
+    unambiguous, so `XX-3 | urgent | …` is a structural error and not a
     guess. A DASH-separated one is a candidate ONLY when its second field
     is a severity literal — `GB-1 — discussed above` is ordinary prose
     cross-referencing an id (a shape the adjudication stage endorses), and
@@ -234,9 +270,77 @@ def parse_report(path: str) -> tuple[list[Finding], list[str]]:
     return findings, errors
 
 
-def row(finding: Finding) -> str:
-    """Eight cells; only id, severity and claim are filled."""
-    return f"| {finding['id']} | {finding['sev']} | {finding['claim']} |  |  |  |  |  |"
+def ledger_width(lines: list[str]) -> tuple[int | None, str | None]:
+    """Return (the target ledger's row width, error-or-None).
+
+    The header's `Row schema:` declaration is authoritative where it exists,
+    the findings header's own cell count where it does not, and a
+    disagreement between the two is refused rather than resolved: the one
+    thing this function may not do is hand back a width that would make
+    every emitted row a structural error of the recount.
+    """
+    declared: list[str] = []
+    for raw in lines:
+        m = ROW_SCHEMA_RE.match(raw.rstrip("\n"))
+        if m:
+            declared.append(m.group(1).strip())
+    if len(declared) > 1:
+        return None, (
+            f"{len(declared)} `Row schema:` header fields — the schema is "
+            f"declared once per ledger; refusing to pick one"
+        )
+    from_header: int | None = None
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = split_row(stripped)
+        if cells and cells[0].lower() == "id":
+            from_header = len(cells)
+            break
+    if declared:
+        value = declared[0].lower()
+        if value not in ROW_SCHEMA_WIDTHS:
+            return None, (
+                f"`Row schema: {declared[0]}` is not one of "
+                f"{'/'.join(ROW_SCHEMA_WIDTHS)} — refusing to guess the "
+                f"row form"
+            )
+        width = ROW_SCHEMA_WIDTHS[value]
+        if from_header is not None and from_header != width:
+            return None, (
+                f"`Row schema: {declared[0]}` declares {width} cells but the "
+                f"findings header has {from_header} — refusing to write rows "
+                f"of either width while the two disagree"
+            )
+        return width, None
+    if from_header is None:
+        return None, (
+            "no findings table found (no header row whose first cell is "
+            "`id`) and no `Row schema:` field — the row form is not derivable"
+        )
+    if from_header not in ROW_WIDTHS:
+        return None, (
+            f"the findings header has {from_header} cells; the row form is "
+            f"one of {'/'.join(str(w) for w in ROW_WIDTHS)} — refusing to "
+            f"emit a row of a width nothing reads"
+        )
+    return from_header, None
+
+
+def row(finding: Finding, width: int = DEFAULT_WIDTH) -> str:
+    """One row of `width` cells; only the NAMED cells are filled.
+
+    `id`, `sev` and `claim` carry the literal copy; the v3 `zone` cell
+    carries the stub the adjudicator replaces. Every other cell is empty on
+    purpose — an empty cell is what keeps a fresh row non-terminal.
+    """
+    cells = [finding["id"], finding["sev"]]
+    if width == V3_WIDTH:
+        cells.insert(ZONE_INDEX, ZONE_PLACEHOLDER)
+    cells.append(finding["claim"])
+    cells += [""] * (width - len(cells))
+    return "| " + " | ".join(cells) + " |"
 
 
 def find_table(lines: list[str]) -> tuple[int | None, list[str] | None, str | None]:
@@ -284,12 +388,29 @@ def find_table(lines: list[str]) -> tuple[int | None, list[str] | None, str | No
     )
 
 
-def write_atomic(path: str, lines: list[str]) -> None:
-    """Write `lines` to `path` through a temporary file and an atomic replace."""
+def write_atomic(path: str, lines: list[str]) -> str | None:
+    """Write `lines` to `path` through a temporary file and an atomic replace.
+
+    The temporary path is PREDICTABLE, so the temporary file is created
+    EXCLUSIVELY (`O_EXCL`): anything already sitting there — a leftover
+    file, or a symlink pointing somewhere else entirely — makes the write
+    REFUSE instead of writing through it, and that file is left exactly
+    where it is, since it is not this script's to delete. Returns the
+    error to report, or None when the replace happened.
+    """
     tmp = path + ".transcribe.tmp"
-    with Path(tmp).open("w", encoding="utf-8") as fh:
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except OSError as exc:
+        return (
+            f"cannot create the temporary file {tmp}: {exc} — something is "
+            f"already there and is NOT overwritten (it is left as it is); "
+            f"remove it once you know what it is, then run this again"
+        )
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.writelines(lines)
     Path(tmp).replace(path)
+    return None
 
 
 def main() -> int:
@@ -337,6 +458,10 @@ def main() -> int:
 
     lines: list[str] = []
     insert_at: int | None = None
+    # `--stdout` has no ledger to read a schema from, so the v2 form is
+    # printed and the caller places it; `--ledger` takes the width from the
+    # target file and refuses to write at all when it is not derivable.
+    width = DEFAULT_WIDTH
     if ledger is not None:
         try:
             with Path(ledger).open(encoding="utf-8") as fh:
@@ -344,6 +469,11 @@ def main() -> int:
         except OSError as exc:
             print(f"cannot read {ledger}: {exc}")
             return 2
+        derived, width_err = ledger_width(lines)
+        if width_err is not None:
+            errors.append(f"{ledger}: {width_err}")
+        else:
+            width = cast("int", derived)
         insert_at, existing, err = find_table(lines)
         if err:
             errors.append(f"{ledger}: {err}")
@@ -366,17 +496,21 @@ def main() -> int:
         print("no findings recognized in: " + ", ".join(args))
         return 2
 
-    rows = [row(f) for f in findings]
+    rows = [row(f, width) for f in findings]
     if to_stdout:
         print("\n".join(rows))
     else:
         head = lines[:insert_at]
         if head and not head[-1].endswith("\n"):
             head[-1] += "\n"  # separator was the last line, no newline
-        write_atomic(
+        write_error = write_atomic(
             cast("str", ledger),
             head + [r + "\n" for r in rows] + lines[insert_at:],
         )
+        if write_error is not None:
+            print("STRUCTURAL ERRORS — nothing was written:")
+            print("  " + write_error)
+            return 2
 
     out = sys.stderr if to_stdout else sys.stdout
     print(

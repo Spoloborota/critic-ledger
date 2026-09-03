@@ -62,6 +62,13 @@ FINDINGS IN THIS BATCH: {findings}
 ORDER OF WORK:
 1. Read each finding block in full, then read the current text at the place
    it points to. The finding's line numbers may already be stale.
+1a. REPRODUCE THE DEFECT BEFORE YOU EDIT. Confirm in the CURRENT text that
+   the finding's premise still holds — the quoted wording is really there,
+   the place still exists, the behaviour is still the one described. If it
+   does not hold, do NOT edit anything for that id and return
+   `premise-not-found` with the concrete reason (see OUTCOMES). An
+   instruction can be wrong, and a fixer that implements a wrong one
+   faithfully is exactly the failure this step exists to catch.
 2. Within one file, apply edits in DESCENDING line-number order, so that an
    earlier edit never shifts the lines a later one targets.
 3. After the edits to a file, RE-CHECK the line numbers of the remaining
@@ -69,7 +76,7 @@ ORDER OF WORK:
    report the post-fix line numbers — not the ones you were handed.
 4. Handle every id in the batch. An id you skipped is not a status.
 
-OUTCOMES — exactly one per id, no third option:
+OUTCOMES — exactly one per id, and there are exactly three:
 - `fixed` — the edit is in the working tree and meets the criterion as
   written.
 - `criterion-unworkable` — the criterion cannot be met (it contradicts the
@@ -78,8 +85,26 @@ OUTCOMES — exactly one per id, no third option:
   back-channel: the orchestrator returns such ids to adjudication (stage 6),
   never straight into the next batch. It is NOT an escape hatch for "hard"
   or "I would have done it differently".
+- `premise-not-found` — step 1a failed: the defect is NOT in the current
+  text, so nothing was edited for that id. Give the concrete reason and the
+  command or quote that shows the premise gone. It takes the SAME route as
+  `criterion-unworkable` — back to adjudication at stage 6 — and the two
+  count together against that id's limit of two returns.
 Nothing else: no "partial", no "already fine", no "deferred", no silence.
 Verdicts about whether a fix landed belong to the verifier, not to you.
+
+NOTICED OUTSIDE BATCH — a report block, and deliberately not a fourth
+value of the vocabulary above. You may not FIX anything outside this batch,
+and you may not swallow what you saw there either. Close your report with a
+block under that exact heading: one entry per observation, each with
+`file:line` and what you observed, each entry written under the prefix
+{noticed_prefix} — fixed by the orchestrator at stage 2 alongside the lens
+prefixes and under the same id contract. The vocabulary above stays as it
+is: still one value per id, and no entry of this block attaches to an id of
+your batch. The orchestrator routes the block's contents to adjudication as
+new findings, by the same route a verifier's new findings take — never
+straight into the next batch, and never into an edit of yours. Write the
+block even when it is empty, as `none`.
 
 YOUR EDITS MUST BE ON DISK. A fix reasoned out in your head, described in
 prose, or applied to a copy is a fix NOT MADE — the orchestrator's commit
@@ -93,5 +118,8 @@ OUTPUT: your final message IS the batch report. Structure:
    every id present exactly once:
    `<id> | fixed | <what changed and where, file:line>`
    `<id> | criterion-unworkable | <reason>`
+   `<id> | premise-not-found | <reason, with the quote or command>`
 3. `FILES TOUCHED:` followed by one path per line — every file you edited,
    and no file you did not.
+4. `NOTICED OUTSIDE BATCH:` last, as described above — the entries under
+   {noticed_prefix}, or the single word `none`.

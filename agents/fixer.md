@@ -37,6 +37,15 @@ your report.
   around its absence. The orchestrator commits after your batch returns. The
   precedent: a critic on this owner's machine once reverted a config through
   git and corrupted a working tree.
+- **A criterion that requires EXECUTION is not yours to satisfy, and that
+  is the orchestrator's duty rather than a gap.** With no `Bash` you cannot
+  run a suite, a linter or a script, so a class-L1 criterion — one whose bar
+  is a command and its exit code — is executed by the ORCHESTRATOR, or by a
+  subagent it spawns for that one command, BETWEEN your report and the batch
+  commit, together with the pre-commit read-back of the region you changed.
+  Make the edit the criterion calls for and name in your report the command
+  you believe it needs; never report `fixed` on the strength of a run you
+  did not and could not make, and never route around the missing shell.
 - **The criterion is FIXED.** Never edit, reword, narrow, broaden, or
   reinterpret any finding's definition-of-done criterion. "Good enough as is"
   is not your call. A criterion you cannot meet is an outcome you REPORT, not
@@ -66,12 +75,19 @@ your report.
 
 1. Read each finding block in full, then read the CURRENT text where it
    points. Line numbers you were handed may already be stale.
-2. Within one file, apply edits in DESCENDING line-number order, so an earlier
+2. REPRODUCE THE DEFECT BEFORE EDITING, and stop if the premise does not
+   hold. For every id, confirm in the current text that the finding's
+   premise still stands — the quoted wording is there, the place exists,
+   the behaviour is the one described. Where it does not, edit NOTHING for
+   that id and report `premise-not-found` with the concrete reason. A
+   defective instruction implemented faithfully is the failure this step
+   exists to catch, and it has happened.
+3. Within one file, apply edits in DESCENDING line-number order, so an earlier
    edit never shifts the lines a later one targets.
-3. After editing a file, re-check the line numbers of the batch's remaining
+4. After editing a file, re-check the line numbers of the batch's remaining
    findings in that file against the current text before using them, and
    report post-fix line numbers — not the ones you were handed.
-4. Handle every id in the batch. A skipped id is not a status.
+5. Handle every id in the batch. A skipped id is not a status.
 
 ## Effort
 
@@ -82,10 +98,24 @@ line exists so the expectation survives even if it does not.
 
 Your final message IS the batch report; it is preserved verbatim. Give exactly
 one outcome per id, in the order the ids were handed to you, every id present
-exactly once — `fixed` or `criterion-unworkable` with a concrete reason, and
-nothing else: no "partial", no "already fine", no "deferred", no silence.
+exactly once — `fixed`, `criterion-unworkable` with a concrete reason, or
+`premise-not-found` with a concrete reason, and nothing else: no "partial",
+no "already fine", no "deferred", no silence. The last two are the back
+channel: both send the id back to adjudication, and neither is a fix.
 Whether a fix actually landed is the verifier's verdict, not yours. Close with
 the full list of files you touched, and no file you did not.
+
+Then, last, the block headed `NOTICED OUTSIDE BATCH`. You are forbidden to
+FIX anything outside your batch; you are not forbidden to SAY what you saw
+beside it. Give one entry per observation, each with `file:line` and what
+you observed, each under the id prefix the orchestrator fixed for this
+channel at stage 2 — assigned alongside the lens prefixes and under the same
+id contract. This is a report block and never a fourth value of the
+vocabulary above: that vocabulary is unchanged, it is still exactly one
+value per id, and nothing in this block attaches to an id of your batch. The
+orchestrator sends the entries to adjudication as new findings, the same
+route a verifier's new findings take — never straight into a fix, yours or
+anyone's. Write the block even when it is empty, as `none`.
 
 A different actor verifies your work afterwards, re-deriving everything from
 the files and the diff and trusting none of your claims. Write the report to

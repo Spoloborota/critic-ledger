@@ -1,9 +1,10 @@
 # CI for the critic-ledger plugin.
 #
 # What runs here and what deliberately does not:
-# - the 38-case regression suite for recount.py (tests/run-regression.sh)
-#   and the 526-case pytest characterization suite (tests/unit/), both on
-#   every supported Python (3.11-3.14);
+# - the regression suite for recount.py (tests/run-regression.sh) and the
+#   pytest characterization suite (tests/unit/), both on every supported
+#   Python (3.11-3.14). Neither is given a case count here: prose counts
+#   are not derived from the suites and drift silently as cases are added;
 # - an informational (never blocking) run of the ty type checker, pre-1.0;
 # - a structural validation of the plugin manifest (JSON well-formedness
 #   + required fields). The official `claude plugin validate --strict`
@@ -30,8 +31,8 @@
 #
 # Supply-chain policy: every `uses:` is pinned to a full commit SHA with the
 # release tag in a trailing comment; a moving tag is a mutable dependency.
-# Dependabot config lives in the development repository, not here: upgrade
-# pull requests land there and reach this workflow only through a release.
+# Dependabot config is not part of this published tree; SHA-pin upgrades
+# reach this workflow only through a release.
 # The workflow needs nothing but read access to its own contents, and says so
 # at the top level; no job widens it.
 name: tests
@@ -91,14 +92,14 @@ jobs:
           # running. Full history is what makes both reachable — `fetch-tags`
           # alone would bring the tag ref without the ancestry `git describe`
           # walks. Verified against the real v0.1.0 tag on 2026-08-11: exit 0,
-          # `new-findings curve: 5 -> 3 -> 1` (tests/COVERAGE-MATRIX-0.2.0.md).
+          # `new-findings curve: 5 -> 3 -> 1`.
           fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      - name: recount.py regression suite (38 cases)
+      - name: recount.py regression suite (79 cases)
         run: sh tests/run-regression.sh
-      - name: pytest characterization suite (526 cases)
+      - name: pytest characterization suite
         run: |
           pip install pytest==9.1.1
           pytest tests/unit -q
@@ -115,8 +116,7 @@ jobs:
           if errs:
               print("\n".join(errs)); sys.exit(1)
           print("manifest structurally valid (note: this is the CI substitute; "
-                "`claude plugin validate --strict` runs in the release procedure; "
-                "the marketplace manifest lives in Spoloborota/spoloborota-plugins)")
+                "`claude plugin validate --strict` runs in the release procedure)")
           EOF
       - name: SKILL.md frontmatter portability
         run: python3 skills/critic-ledger/templates/check-frontmatter.py skills/critic-ledger/SKILL.md
@@ -216,6 +216,6 @@ jobs:
             --no-progress
             --max-retries 3
             --exclude 'doi\.org/10\.1056/'
-            README.md CONTRIBUTING.md CHANGELOG.md SECURITY.md
+            README.md CONTRIBUTING.md CHANGELOG.md
             'docs/**/*.md' 'examples/**/*.md'
             'agents/**/*.md' 'skills/**/*.md'

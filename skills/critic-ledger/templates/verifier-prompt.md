@@ -11,11 +11,35 @@ required.
 OBJECT under remediation (verify the CURRENT head, not commit snapshots):
 {object_path}
 LEDGER rows in your scope (the fix design lives in the verdict cells, the
-bar you judge against — in the criterion cells):
+bar you judge against — in the criterion cells). A row deduplicated from
+another lens carries `=<primary-id>` in its criterion cell in the ledger
+itself; here it reaches you with the PRIMARY row's criterion text
+substituted IN FULL, so you never chase a reference into a lens that is not
+yours — judge the row against that substituted text. If a row still shows
+you a bare `=<primary-id>` and no criterion, DEMAND the text from the
+orchestrator; never invent a criterion of your own:
 {ledger_rows}
+YOUR LENS SCOPE. This pass may be a `lens-split verification pass` — one
+pass executed by N FRESH verifiers instead of one, each with its own
+non-overlapping set of ids. This field says which ids are yours and which
+belong to another verifier of the SAME pass; ids that are not yours are not
+yours to verdict, and saying nothing about them is correct rather than a
+hole in the pass:
+{lens_scope}
+(On an unsplit pass this reads `all ids of this pass`. Either way you are a
+FRESH verifier: not a continuation of any verifier of any earlier pass, and
+never the actor that made the fixes.)
 CANON files: the ledger + the round's verbatim salvaged reports at
 {salvage_path}. Prior verdicts, when re-verifying after a re-fix:
 {prior_verdicts}
+WHAT YOU ARE DELIBERATELY NOT GIVEN: the fixer's report and the fixer's
+justification. This prompt carries no placeholder for either, and none is
+to be added — you get the criterion cell, the diffs and the critics'
+verbatim salvages, and you derive the verdict yourself. The question you
+answer is "would a fresh critic still file here?", never "were the edits
+applied as described?". The reason is measured: a reviewer shown someone
+else's verdict changes their mind in about a third of cases, and a
+cold-start reviewer gives the higher-value signal.
 FIX COMMITS to verify: {batch_commits}
 (In DEGRADED mode there are no batch commits at all, so this placeholder
 reads `none (degraded)`: the ORCHESTRATOR builds the deleted-line list
@@ -53,6 +77,10 @@ MANDATE per id:
    a NEW finding under your own prefix (see below).
 4. Re-derive every number the fixes introduced from the primary sources —
    never from the fixer's claims. Flag any number you cannot re-derive.
+   A NUMBER MATCHING IS NOT A MECHANISM MATCHING: check the DIRECTION of a
+   rule, not only its constants. A facts-critic once verified every figure
+   in a chapter and missed that the chapter had INVERTED the mechanism
+   those figures belong to. Right numbers, wrong rule, is a finding.
 5. DELETED-LINE SCAN — you JUDGE a ready list, you do NOT assemble it.
    The mechanical pre-pass (`templates/deleted-lines.py`) has already
    extracted every deleted (-) line of the batch diffs; its output is
@@ -96,6 +124,9 @@ header (scope, commits, method, depth applied and why), per-id
 NOT LANDED | criterion | evidence`, the deleted-line scan result (one
 judgment per handed line, plus every NOTE, closing with `judged N of N
 listed`), new findings, and a count line `N LANDED / N LANDED OTHERWISE
-/ N PARTIAL / N NOT`. Vocabulary note: your per-id result goes into the
+/ N PARTIAL / N NOT`. One further field is MANDATORY and is not a section
+left to your initiative — write it even when it is empty:
+Deviations from the pass instruction (if any) and why.
+Vocabulary note: your per-id result goes into the
 ledger's `verified` column (the `verdict` column belongs to adjudication
 and is not yours to fill).

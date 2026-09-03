@@ -19,7 +19,7 @@ What is a PROBLEM (a line in the problems list, exit 1)
   PREFIX handed out by the orchestrator for this lens. A foreign prefix
   (another lens's, or the verifier's) or a malformed id (`GA1`, `GA-1a`,
   `GA-`) is a problem: the ledger's recount contract depends on ids
-  (`recount.py:85`), and prefixes are unique per lens by design.
+  (`ID_RE` in `recount.py`), and prefixes are unique per lens by design.
 - Severity: the second cell must be one of the literals `blocker`,
   `major`, `minor`. Anything else — a Russian analogue, a seven-level
   scale word, an empty cell — is a problem. (Case is tolerated: `Major`
@@ -85,7 +85,12 @@ import sys
 from pathlib import Path
 from typing import TypedDict
 
-# Strict id contract, identical to the ledger recount (`recount.py:85`).
+# A report id is ONE lens prefix and a number: the single-segment form
+# of the recount's own id contract (`ID_RE` in recount.py), which
+# additionally accepts a dash-joined composite prefix (`V-CIT-1`).
+# The narrower form is deliberate here: a lens prefix is handed out at
+# stage 2 from the `[A-Z][A-Z0-9]{0,3}` alphabet and is never
+# composite.
 ID_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*)-(\d+)$")
 # Loose id: letters, an optional separator, digits, optional junk tail.
 IDISH_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*[\s\-‐-―_.]*\d+[A-Za-z0-9]*$")  # noqa: RUF001  # deliberate U+2010..U+2015 dash range
@@ -130,29 +135,6 @@ SEVERITY_ISH = {
     "trivial",
     "cosmetic",
     "nit",
-    "блокер",
-    "блокирующая",
-    "блокирующий",
-    "критично",
-    "критичная",
-    "критичный",
-    "критическая",
-    "критический",
-    "важно",
-    "важная",
-    "важный",
-    "серьезно",
-    "серьезная",
-    "значимая",
-    "средняя",
-    "мажор",
-    "минор",
-    "мелочь",
-    "мелкая",
-    "незначительно",
-    "незначительная",
-    "низкая",
-    "высокая",
 }
 
 # Evidence: `path.ext:123`, `dir/name:123`, or a capitalized extensionless
@@ -213,18 +195,12 @@ CMD_WORDS = {
 }
 
 HEADER_FIELDS = (
-    ("object", ("объект", "object")),
-    ("lens", ("линза", "линзой", "lens")),
-    ("method", ("метод", "method")),
+    ("object", ("object",)),
+    ("lens", ("lens",)),
+    ("method", ("method",)),
 )
 COVERAGE_MARKERS = (
-    "покрыти",
     "coverage",
-    "не осматрив",
-    "не проверял",
-    "не проверено",
-    "не читал",
-    "вне таймбокса",
     "did not examine",
     "not examined",
     "skipped",
@@ -238,7 +214,7 @@ def clean_cell(text: str) -> str:
 
 def normalize(text: str) -> str:
     """Lower-case a cell and trim the punctuation comparisons ignore."""
-    return clean_cell(text).lower().replace("ё", "е").strip(" .,:;!?")  # noqa: RUF001  # deliberate Cyrillic yo -> ye folding
+    return clean_cell(text).lower().strip(" .,:;!?")
 
 
 def split_cells(line: str) -> list[str] | None:

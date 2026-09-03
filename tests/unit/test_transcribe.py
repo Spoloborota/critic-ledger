@@ -302,3 +302,162 @@ def test_ledger_flag_without_a_value(run, report):
     res = run(SCRIPT, report(TWO_FINDINGS), "--ledger")
     assert res.returncode == 2, res.stdout
     assert res.stdout.startswith("--ledger needs a path")
+
+
+# --- 0.3.0: the row form is the LEDGER'S, not a hard-wired eight -----------
+# Three schemas are in use (7, 8 and 9 cells), and a row of the wrong width
+# is a structural error of recount.py — so the width is READ from the target
+# ledger, and where it cannot be read nothing is written at all.
+
+HEADER_7 = ("| id | sev | claim | verdict | fix | verified | terminal |\n"
+            "|---|---|---|---|---|---|---|\n")
+HEADER_9 = ("| id | sev | zone | claim | verdict | criterion | fix | "
+            "verified | terminal |\n"
+            "|---|---|---|---|---|---|---|---|---|\n")
+
+
+def test_a_v3_ledger_gets_nine_cell_rows_with_the_zone_stub(run, report,
+                                                            tmp_path):
+    """The emitted v3 row, exactly as the contract states it."""
+    led = tmp_path / "v3.md"
+    led.write_text(HEADER_9, encoding="utf-8")
+    res = run(SCRIPT, report(TWO_FINDINGS), "--ledger", led)
+    assert res.returncode == 0, res.stdout
+    assert "| GA-1 | major | · | first claim |  |  |  |  |  |" in read(led)
+    assert "| GA-2 | minor | · | second claim |  |  |  |  |  |" in read(led)
+
+
+def test_the_stub_is_the_only_thing_transcription_decides(run, report,
+                                                          tmp_path):
+    """Zone is a judgment: the stub is written, never a guessed zone."""
+    led = tmp_path / "v3.md"
+    led.write_text(HEADER_9, encoding="utf-8")
+    run(SCRIPT, report(TWO_FINDINGS), "--ledger", led)
+    for zone in ("Z1", "Z2", "Z3"):
+        assert f"| {zone} |" not in read(led)
+
+
+def test_a_v1_ledger_gets_seven_cell_rows(run, report, tmp_path):
+    """A row of the ledger's own width, not the current schema's."""
+    led = tmp_path / "v1.md"
+    led.write_text(HEADER_7, encoding="utf-8")
+    res = run(SCRIPT, report(TWO_FINDINGS), "--ledger", led)
+    assert res.returncode == 0, res.stdout
+    assert "| GA-1 | major | first claim |  |  |  |  |" in read(led)
+
+
+def test_a_v2_ledger_still_gets_eight_cell_rows(run, report, tmp_path):
+    led = tmp_path / "v2.md"
+    led.write_text(HEADER_8, encoding="utf-8")
+    res = run(SCRIPT, report(TWO_FINDINGS), "--ledger", led)
+    assert res.returncode == 0, res.stdout
+    assert "| GA-1 | major | first claim |  |  |  |  |  |" in read(led)
+
+
+def test_the_header_field_decides_the_width(run, report, tmp_path):
+    """`Row schema:` is authoritative where the table agrees with it."""
+    led = tmp_path / "declared.md"
+    led.write_text("- Row schema: v3\n" + HEADER_9, encoding="utf-8")
+    res = run(SCRIPT, report(TWO_FINDINGS), "--ledger", led)
+    assert res.returncode == 0, res.stdout
+    assert "| GA-1 | major | · | first claim |" in read(led)
+
+
+def test_a_field_contradicting_the_table_writes_nothing(run, report,
+                                                        tmp_path):
+    led = tmp_path / "conflict.md"
+    before = "- Row schema: v2\n" + HEADER_9
+    led.write_text(before, encoding="utf-8")
+    res = run(SCRIPT, report(TWO_FINDINGS), "--ledger", led)
+    assert res.returncode == 2, res.stdout
+    assert "refusing to write rows of either width" in res.stdout
+    assert read(led) == before
+
+
+def test_an_unknown_schema_name_writes_nothing(run, report, tmp_path):
+    led = tmp_path / "unknown.md"
+    before = "- Row schema: newest\n" + HEADER_8
+    led.write_text(before, encoding="utf-8")
+    res = run(SCRIPT, report(TWO_FINDINGS), "--ledger", led)
+    assert res.returncode == 2, res.stdout
+    assert "refusing to guess the row form" in res.stdout
+    assert read(led) == before
+
+
+def test_a_header_of_an_unsupported_width_writes_nothing(run, report,
+                                                         tmp_path):
+    led = tmp_path / "narrow.md"
+    before = "| id | sev | terminal |\n|---|---|---|\n"
+    led.write_text(before, encoding="utf-8")
+    res = run(SCRIPT, report(TWO_FINDINGS), "--ledger", led)
+    assert res.returncode == 2, res.stdout
+    assert "refusing to emit a row of a width nothing reads" in res.stdout
+    assert read(led) == before
+
+
+def test_stdout_mode_prints_the_v2_form(run, report):
+    """There is no ledger to ask; the caller places the row."""
+    res = run(SCRIPT, report(TWO_FINDINGS), "--stdout")
+    assert res.returncode == 0, res.stdout
+    assert res.stdout.splitlines()[0] == (
+        "| GA-1 | major | first claim |  |  |  |  |  |")
+
+
+# --- the id contract is recount.py's, not a second one ---------------------
+# A prefix is ONE OR MORE letter-led segments joined by dashes, so a
+# verifier re-checking a lens writes the composite `V-CIT-1`. A shape
+# recount.py counts as a row must be recognized as a finding header here,
+# or the report carrying it is silently transcribed as nothing.
+
+
+def test_a_composite_verifier_id_is_transcribed(run, report):
+    res = run(SCRIPT, report("V-CIT-1 | minor | a composite id\n"), "--stdout")
+    assert res.returncode == 0, res.stdout
+    assert res.stdout == "| V-CIT-1 | minor | a composite id |  |  |  |  |  |\n"
+
+
+def test_a_composite_verifier_id_reaches_the_ledger(run, report, ledger):
+    target = ledger(LEDGER_ROW)
+    res = run(SCRIPT, report("V-CIT-1 | minor | a composite id\n"),
+              "--ledger", target)
+    assert res.returncode == 0, res.stdout
+    assert read(target).splitlines()[2] == (
+        "| V-CIT-1 | minor | a composite id |  |  |  |  |  |")
+
+
+@pytest.mark.parametrize("finding_id", ["DA-1", "L1-2", "V-CIT-1", "V-CIT-D-3"])
+def test_the_id_shapes_recount_accepts_are_finding_headers(run, report,
+                                                           finding_id):
+    res = run(SCRIPT, report(f"{finding_id} | minor | claim\n"), "--stdout")
+    assert res.returncode == 0, res.stdout
+    assert res.stdout.split("|")[1].strip() == finding_id
+
+
+@pytest.mark.parametrize("not_an_id", ["-1", "V--1", "1-V", "V-CIT-"])
+def test_the_shapes_recount_rejects_are_not_finding_headers(run, report,
+                                                            not_an_id):
+    """The four non-ids recount.py's contract names, refused here too."""
+    res = run(SCRIPT, report(f"{not_an_id} | minor | claim\n"), "--stdout")
+    assert res.returncode == 2, res.stdout
+    assert "no findings recognized in:" in res.stdout
+
+
+# --- the temporary file is created exclusively -----------------------------
+
+
+def test_a_symlink_at_the_temporary_path_stops_the_write(run, report, ledger,
+                                                          tmp_path):
+    """The tmp path is predictable: nothing is ever written THROUGH it."""
+    target = ledger(LEDGER_ROW)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("not ours\n", encoding="utf-8")
+    planted = tmp_path / (target.name + ".transcribe.tmp")
+    planted.symlink_to(outside)
+    before = read(target)
+    res = run(SCRIPT, report(TWO_FINDINGS), "--ledger", target)
+    assert res.returncode == 2, res.stdout
+    assert res.stdout.startswith("STRUCTURAL ERRORS — nothing was written:")
+    assert "cannot create the temporary file" in res.stdout
+    assert read(target) == before
+    assert outside.read_text(encoding="utf-8") == "not ours\n"
+    assert planted.is_symlink()

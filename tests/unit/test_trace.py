@@ -428,7 +428,10 @@ def test_unit_is_closed_per_actor(trace, tmp_path, actor, unit, accepted):
         ("verifier", "L:9,P:1,NOT:0,new:2", True),
         ("verifier", "L:9", False),
         ("fixer", "fixed:3,unworkable:1", True),
+        ("fixer", "fixed:3,unworkable:1,notfound:2", True),
         ("fixer", "fixed:3", False),
+        ("fixer", "fixed:3,notfound:2", False),
+        ("fixer", "fixed:3,unworkable:1,notfound:2,dropped:1", False),
         ("script", "ok", True),
         ("script", "error:unparseable-line", True),
         ("script", "error:whatever", False),
@@ -468,6 +471,75 @@ def test_outcome_is_closed_per_actor(trace, tmp_path, actor, outcome, accepted):
         )
     )
     assert (diagnostics(res) == []) is accepted, res.stdout
+
+
+# The fixer bound BEFORE `notfound:` joined the outcome. Named here because
+# the case below asserts both sides of the raise, and one of the two sides
+# is a statement about the bound that no longer exists in the script.
+PREVIOUS_FIXER_MAX_LEN = 32
+# The realistic two-digit batch: ten fixed, ten unworkable, ten with no
+# premise. Thirty-four characters, so the pattern alone never decided it.
+TWO_DIGIT_FIXER_OUTCOME = "fixed:10,unworkable:10,notfound:10"
+
+
+def test_a_two_digit_three_part_fixer_outcome_is_accepted(trace, tmp_path):
+    """Both sides of the raise: too long for the old bound, taken by the new.
+
+    `bounded` cuts by LENGTH independently of the pattern, so a three-part
+    outcome that matches perfectly would still have been refused at 32. The
+    fixture is the realistic case, not the worst one: a batch of ten is
+    ordinary, and it is already two characters over the old bound.
+    """
+    assert len(TWO_DIGIT_FIXER_OUTCOME) == 34
+    assert len(TWO_DIGIT_FIXER_OUTCOME) > PREVIOUS_FIXER_MAX_LEN
+    path = tmp_path / "trace.jsonl"
+    res = trace(
+        *span_args(
+            path,
+            actor="fixer",
+            unit="B2",
+            outcome=TWO_DIGIT_FIXER_OUTCOME,
+            **{
+                "id-prefix": None,
+                "agent-id": None,
+                "model-assigned": "opus",
+                "model-actual": "unknown",
+                "tokens-in": None,
+                "tokens-out": None,
+                "cache-write": None,
+                "cache-read": None,
+            },
+        )
+    )
+    assert diagnostics(res) == [], res.stdout
+    written = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert written["outcome"] == TWO_DIGIT_FIXER_OUTCOME
+
+
+def test_the_worst_case_three_part_outcome_still_fits_the_bound(trace, tmp_path):
+    """Four digits in every counter — 40 characters, under the bound of 48."""
+    worst = "fixed:9999,unworkable:9999,notfound:9999"
+    assert len(worst) == 40
+    path = tmp_path / "trace.jsonl"
+    res = trace(
+        *span_args(
+            path,
+            actor="fixer",
+            unit="B2",
+            outcome=worst,
+            **{
+                "id-prefix": None,
+                "agent-id": None,
+                "model-assigned": "opus",
+                "model-actual": "unknown",
+                "tokens-in": None,
+                "tokens-out": None,
+                "cache-write": None,
+                "cache-read": None,
+            },
+        )
+    )
+    assert diagnostics(res) == [], res.stdout
 
 
 @pytest.mark.parametrize(
@@ -601,21 +673,32 @@ def test_a_partial_counter_set_is_refused(trace, tmp_path):
     assert diagnostics(res) == ["schema-refused: trace.jsonl"]
 
 
-def test_a_bare_total_tokens_is_refused(trace, tmp_path):
+def test_a_bare_total_tokens_is_written_under_its_own_source(trace, tmp_path):
+    """`append` writes the aggregate-alone record `validate` accepts — and
+    only where `--tokens-source` names that delivery.
+    """  # noqa: D205  # two sentences, one rule
     path = tmp_path / "trace.jsonl"
-    res = trace(
-        *span_args(
-            path,
-            **{
-                "total-tokens": "1315612",
-                "tokens-in": None,
-                "tokens-out": None,
-                "cache-write": None,
-                "cache-read": None,
-            },
-        )
+    bare: dict[str, str | None] = {
+        "total-tokens": "1315612",
+        "tokens-in": None,
+        "tokens-out": None,
+        "cache-write": None,
+        "cache-read": None,
+    }
+    accepted = trace(
+        *span_args(path, **bare, **{"tokens-source": "agent-tool-result-total"})
     )
-    assert diagnostics(res) == ["schema-refused: trace.jsonl"]
+    assert diagnostics(accepted) == [], accepted.stdout
+    written = records(path)
+    assert len(written) == 1
+    assert written[0]["tokens"] == {"total": 1315612}
+    assert written[0]["tokens_source"] == "agent-tool-result-total"
+    # PRESERVED: the same bare aggregate is refused where the source does not
+    # name the total-only delivery — defaulted, or given as another source.
+    for over in ({}, {"tokens-source": "agent-tool-result"}):
+        refused = trace(*span_args(path, **bare, **over))
+        assert diagnostics(refused) == ["schema-refused: trace.jsonl"]
+    assert len(records(path)) == 1
 
 
 def test_non_integer_counters_are_refused(trace, tmp_path):
@@ -659,6 +742,92 @@ def test_total_tokens_cross_check_reports_a_mismatch(trace, tmp_path):
     res = trace("validate", path)
     assert res.returncode == 0
     assert defects(res) == ["defect: total-tokens-mismatch line 1"]
+
+
+# --- tokens: the total-only delivery ---------------------------------------
+
+def total_only(**over: object) -> str:
+    """A closing record measured as ONE aggregate — no four counters."""
+    line = json.loads(EXAMPLE_CRITIC)
+    line["tokens"] = {"total": 1315612}
+    line["tokens_source"] = "agent-tool-result-total"
+    line.update(over)
+    return json.dumps(line)
+
+
+def test_a_single_total_key_is_valid_for_the_total_only_source(trace, trace_file):
+    """`{"total": n}` is the shape `agent-tool-result-total` delivers."""
+    res = trace("validate", trace_file(total_only()))
+    assert diagnostics(res) == []
+    assert defects(res) == []
+
+
+def test_the_four_counter_form_stays_valid_beside_the_new_branch(trace, trace_file):
+    """PRESERVED: the branch was ADDED, it did not replace the old form."""
+    res = trace("validate", trace_file(EXAMPLE_CRITIC))
+    assert diagnostics(res) == []
+    assert defects(res) == []
+
+
+def test_a_total_only_object_is_refused_for_the_four_counter_source(
+    trace, trace_file
+):
+    """The one-key form is admitted for its own source and no other."""
+    line = total_only(tokens_source="agent-tool-result")
+    res = trace("validate", trace_file(line))
+    assert diagnostics(res) == ["schema-refused: trace.jsonl:1"]
+
+
+def test_the_four_counter_form_is_refused_for_the_total_only_source(
+    trace, trace_file
+):
+    """The source names what was measured: an aggregate, and nothing else."""
+    line = json.loads(EXAMPLE_CRITIC)
+    line["tokens_source"] = "agent-tool-result-total"
+    res = trace("validate", trace_file(json.dumps(line)))
+    assert diagnostics(res) == ["schema-refused: trace.jsonl:1"]
+
+
+def test_a_negative_total_is_refused_in_the_total_only_form(trace, trace_file):
+    res = trace("validate", trace_file(total_only(tokens={"total": -1})))
+    assert diagnostics(res) == ["schema-refused: trace.jsonl:1"]
+
+
+def test_a_counter_riding_beside_the_total_is_refused(trace, trace_file):
+    """`total` and nothing else: an aggregate carrying a PARTIAL breakdown
+    is not the shape the source names, and exact equality is what says so.
+    """  # noqa: D205  # two sentences, one rule
+    line = total_only(tokens={"total": 1315612, "in": 118})
+    res = trace("validate", trace_file(line))
+    assert diagnostics(res) == ["schema-refused: trace.jsonl:1"]
+
+
+def test_all_five_token_keys_are_refused_in_the_total_only_form(trace, trace_file):
+    """Nor may the FULL four-counter breakdown ride along with the aggregate."""
+    line = total_only(
+        tokens={
+            "in": 118,
+            "out": 14203,
+            "cache_write": 96411,
+            "cache_read": 1204880,
+            "total": 1315612,
+        }
+    )
+    res = trace("validate", trace_file(line))
+    assert diagnostics(res) == ["schema-refused: trace.jsonl:1"]
+
+
+def test_validate_on_a_total_only_trace_prints_the_normal_summary(
+    trace, trace_file
+):
+    """The RUN, not the predicate: the reader of the four counters used to
+    raise on this record, and `main()` printed `write-failed` in its place.
+    """  # noqa: D205  # two sentences, one rule
+    res = trace("validate", trace_file(total_only()))
+    assert res.returncode == 0
+    assert res.stderr == ""
+    assert "write-failed" not in res.stdout
+    assert "trace: 1 spans, 0 unclosed, 0 refused lines, 0 defects" in res.stdout
 
 
 # --- models ----------------------------------------------------------------
@@ -1186,3 +1355,243 @@ def test_the_open_lookup_walks_past_noise_lines(trace, trace_file):
     assert diagnostics(res) == [], res.stdout
     written = path.read_text(encoding="utf-8").splitlines()
     assert json.loads(written[-1])["started"] == "2026-08-11T10:16:04Z"
+
+
+# --- the composite finding id -----------------------------------------------
+#
+# The finding-id shape here is `recount.py`'s id contract, which accepts a
+# dash-joined composite prefix (`V-CIT-1`) — the form a verifier uses to keep
+# the lens it re-checked inside the id. A narrower shape would make a span
+# naming such a finding `schema-refused`, which is a trace hole exactly where
+# the round did the most work.
+
+def test_a_span_naming_a_composite_finding_id_is_written_and_validates(
+    trace, tmp_path
+):
+    """`V-CIT-1` is the id contract's composite form, not a malformed id."""
+    path = tmp_path / "trace.jsonl"
+    appended = trace(
+        *span_args(
+            path,
+            span="s7.02",
+            actor="fixer",
+            unit="B2",
+            ids="V-CIT-1,HA-2",
+            outcome="fixed:2,unworkable:0",
+            **{"id-prefix": None, "model-actual": "unknown"},
+        )
+    )
+    assert diagnostics(appended) == [], appended.stdout
+    assert records(path)[0]["ids"] == ["V-CIT-1", "HA-2"]
+    validated = trace("validate", path)
+    assert validated.returncode == 0
+    assert diagnostics(validated) == [], validated.stdout
+
+
+# --- the owner-wait span: an orchestrator unit, not a new actor -------------
+#
+# Waiting for the owner is recorded as an orchestrator UNIT with two closed
+# vocabularies of its own — a reason inside the unit name and an outcome
+# (`answered | refused | abandoned`). The outcome check is UNIT-aware for
+# exactly one reason: a single merged pattern would pass `scoped` on an
+# owner-wait span and `answered` on `scoping`, and the schema would stop
+# telling the two units apart. The cases below pin that discrimination in
+# both directions, and the length bound the longest reason sits on.
+
+OWNER_WAIT_REASONS = (
+    "signature",
+    "authorization",
+    "fork",
+    "amendment",
+    "ratification",
+    "z3-closure",
+)
+# The bound as the script itself states it — read out of the source text,
+# never re-typed here, so a change to the constant fails this test rather
+# than passing under a stale copy.
+ORCHESTRATOR_UNIT_LEN_RE = re.compile(
+    r"^MAX_ORCHESTRATOR_UNIT_LEN = (\d+)$", re.MULTILINE
+)
+
+
+def owner_wait(**over) -> str:
+    """An owner-wait span: the orchestrator's own record of a wait."""
+    line = {
+        "v": 1,
+        "kind": "span",
+        "round": ROUND,
+        "span": "s9.01",
+        "parent": "s1.00",
+        "stage": 9,
+        "actor": "orchestrator",
+        "unit": "owner-wait-signature",
+        "id_prefix": None,
+        "agent_id": None,
+        "ids": [],
+        "id_tags": {},
+        "flags": [],
+        "model_assigned": "n/a",
+        "model_actual": "n/a",
+        "model_source": "n/a",
+        "tokens": None,
+        "tokens_source": "absent",
+        "commit": None,
+        "started": "2026-08-11T11:50:00Z",
+        "ended": "2026-08-11T12:05:00Z",
+        "wallclock_s": 900,
+        "outcome": "answered",
+    }
+    line.update(over)
+    return json.dumps(line)
+
+
+def test_an_owner_wait_span_validates(trace, trace_file):
+    """The fixture the unmodified code refused: the unit was not in the list."""
+    res = trace("validate", trace_file(owner_wait()))
+    assert res.returncode == 0, res.stdout
+    assert diagnostics(res) == [], res.stdout
+    assert defects(res) == []
+    assert res.stdout.strip().splitlines()[-1] == (
+        "trace: 1 spans, 0 unclosed, 0 refused lines, 0 defects"
+    )
+
+
+@pytest.mark.parametrize("reason", OWNER_WAIT_REASONS)
+def test_every_reason_of_the_closed_vocabulary_is_accepted(trace, trace_file, reason):
+    res = trace("validate", trace_file(owner_wait(unit=f"owner-wait-{reason}")))
+    assert diagnostics(res) == [], res.stdout
+
+
+@pytest.mark.parametrize("outcome", ["answered", "refused", "abandoned"])
+def test_every_owner_wait_outcome_is_accepted(trace, trace_file, outcome):
+    res = trace("validate", trace_file(owner_wait(outcome=outcome)))
+    assert diagnostics(res) == [], res.stdout
+
+
+@pytest.mark.parametrize(
+    ("unit", "outcome", "accepted"),
+    [
+        ("owner-wait-signature", "answered", True),
+        # The discrimination itself: neither word crosses to the other unit.
+        ("owner-wait-signature", "scoped", False),
+        ("scoping", "answered", False),
+        # A reason outside the closed vocabulary is not an owner-wait unit.
+        ("owner-wait-lunch", "answered", False),
+        ("owner-wait-lunch", "scoped", False),
+        # And the orchestrator's own units keep their own outcomes.
+        ("scoping", "scoped", True),
+        ("closure", "closed", True),
+        ("adjudication-batch-3", "upheld:1,refuted:0", True),
+    ],
+)
+def test_the_outcome_check_tells_the_orchestrator_units_apart(
+    trace, trace_file, unit, outcome, accepted
+):
+    res = trace("validate", trace_file(owner_wait(unit=unit, outcome=outcome)))
+    assert res.returncode == 0
+    assert (diagnostics(res) == []) is accepted, res.stdout
+
+
+def test_an_owner_wait_span_carrying_tokens_is_refused(trace, trace_file):
+    """A PRESERVED property, not evidence of this change.
+
+    `valid_tokens` already refuses any `tokens` on an orchestrator span,
+    and did so before the owner-wait unit existed — this case reads the
+    same before and after. It is pinned so the new unit cannot acquire a
+    token cell through a later widening.
+    """
+    line = owner_wait(
+        tokens={"in": 1, "out": 2, "cache_write": 3, "cache_read": 4},
+        tokens_source="agent-tool-result",
+    )
+    res = trace("validate", trace_file(line))
+    assert diagnostics(res) == ["schema-refused: trace.jsonl:1"]
+
+
+def test_the_longest_reason_sits_exactly_on_the_unit_length_bound(
+    trace, trace_file, scripts_dir
+):
+    """`owner-wait-authorization` is the bound, checked and not eyeballed."""
+    found = ORCHESTRATOR_UNIT_LEN_RE.findall(
+        (scripts_dir / SCRIPT).read_text(encoding="utf-8")
+    )
+    assert len(found) == 1, found
+    longest = "owner-wait-authorization"
+    assert len(longest) == int(found[0])
+    accepted = trace("validate", trace_file(owner_wait(unit=longest)))
+    assert diagnostics(accepted) == [], accepted.stdout
+    # One character past the bound is refused, and so is a padded reason.
+    refused = trace(
+        "validate",
+        trace_file(owner_wait(unit=longest + "x"), name="second.jsonl"),
+    )
+    assert diagnostics(refused) == ["schema-refused: second.jsonl:1"]
+
+
+def test_the_owner_wait_pair_is_written_through_append(trace, tmp_path):
+    """The orchestrator opens at the question and closes on the owner's word."""
+    path = tmp_path / "trace.jsonl"
+    common: dict[str, str | None] = {
+        "round": ROUND,
+        "span": "s6.04",
+        "actor": "orchestrator",
+        "unit": "owner-wait-fork",
+        "id-prefix": None,
+        "agent-id": None,
+        "model-assigned": None,
+    }
+    opened = trace(
+        *to_args(path, {"kind": "open", **common, "started": "2026-08-11T11:50:00Z"})
+    )
+    assert diagnostics(opened) == [], opened.stdout
+    closed = trace(
+        *to_args(
+            path,
+            {
+                "kind": "span",
+                **common,
+                "outcome": "refused",
+                "ended": "2026-08-11T12:05:00Z",
+            },
+        )
+    )
+    assert diagnostics(closed) == [], closed.stdout
+
+    written = records(path)
+    assert [r["kind"] for r in written] == ["open", "span"]
+    assert [r["unit"] for r in written] == ["owner-wait-fork", "owner-wait-fork"]
+    # `started` is copied from the open record, so a wait that spanned a
+    # compaction keeps its true length.
+    assert written[1]["started"] == "2026-08-11T11:50:00Z"
+    assert written[1]["wallclock_s"] == 900
+    assert written[1]["model_assigned"] == "n/a"
+    assert written[1]["tokens"] is None
+
+    res = trace("validate", path)
+    assert diagnostics(res) == []
+    assert defects(res) == []
+
+
+def test_an_owner_wait_open_without_its_close_is_an_unclosed_span(trace, tmp_path):
+    """An unfinished wait reads as one unclosed span, never as a zero."""
+    path = tmp_path / "trace.jsonl"
+    trace(
+        *to_args(
+            path,
+            {
+                "kind": "open",
+                "round": ROUND,
+                "span": "s9.01",
+                "actor": "orchestrator",
+                "unit": "owner-wait-signature",
+                "id-prefix": None,
+                "agent-id": None,
+                "model-assigned": None,
+                "started": "2026-08-11T11:50:00Z",
+            },
+        )
+    )
+    res = trace("validate", path)
+    assert res.returncode == 0
+    assert diagnostics(res) == [], res.stdout
+    assert "trace: 1 unclosed spans (round interrupted)" in res.stdout

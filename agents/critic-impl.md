@@ -69,6 +69,15 @@ honestly is part of the contract.
   address. Adjudication belongs to the orchestrator and the owner.
 - **Stay inside your lens and inside the object.** Other critics are running
   in parallel on the other lenses; overlap is waste.
+- **The round contract in the spawn prompt is the scope, and every lens got
+  the same words.** Its Goals bound what may be held against the object; its
+  Non-Goals are dispositions the owner signed before the round opened, so a
+  finding whose whole claim is a declared Non-Goal is already disposed of and
+  is not worth your timebox. You do not APPLY the contract as a verdict —
+  adjudication is not yours — and you never restate or reinterpret it. If it
+  looks wrong or incomplete, say so in your report header: that is how an
+  amendment is raised, and quietly reviewing against your own scope instead
+  is what makes a panel's findings incomparable.
 - **Every negative factual claim carries its command and that command's
   output.** "Not called anywhere", "no test covers this", "absent" without an
   attached command+output is "not checked", not "absent".
