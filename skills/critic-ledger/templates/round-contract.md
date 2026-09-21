@@ -146,6 +146,9 @@ as a lost number.
 ## 6. Stopping rule (OWNER SIGNS)
 
 - **Rounds:** {n}. **Fix batches:** {n}. **Verification passes:** {n}.
+- **Profile:** {auto | F | M | L}. `auto` = assigned at stage 6 by the
+  thresholds of references/stage-2-scope-and-lenses.md 2.4; a fixed value is
+  the owner's and stage 6 records it as given.
 - **What happens to whatever is still open when the rule fires:** {nomination
   into the residue register | freeze and carry into the next round}. Name ONE
   of the two; "we will see" is not a disposition. Whichever is named here also
@@ -169,6 +172,39 @@ as a lost number.
   closed such a row, and that round has no right to the one-pass shortcut of
   the soft 20-findings threshold either.
 
+An answer written here is the owner's signature on that fork; the
+orchestrator transcribes it into the ledger where the stage text asks for a
+signature and never manufactures one out of silence. The security/PII
+class (§3) is exempt from every answer here that writes a signature
+literal — the ratification of nominated minors and the default sign for a minor of the
+last permitted pass: a row marked `class:security-pii` needs the owner's
+live word for BOTH of its outcomes, so a pre-signed disposition does not
+reach it, and such a row carries its own live `user-signed <date>` or stays
+open.
+
+- **Pre-signed answers** (each `{answer | ask}`; `ask` keeps today's
+  behaviour — the round stops and puts the fork to the owner):
+  - a blocker found in the round — fixed in the round / ask;
+  - a design fork at a structural impossibility of the edit — freeze and
+    carry / fork-research first / ask;
+  - ratification of minors nominated into residue — pre-ratified by this
+    signature with the literal `accepted-residue user-signed <date>` / ask;
+  - exit family when the stop rule fires — as named above;
+  - the residue-scoped second pass — granted by this signature (9.6) / not
+    granted;
+  - a blind re-check that disagrees with a security/PII ruling — `ask`, and
+    no other answer is offered: such a re-check is put to the owner AS a
+    disagreement, never smoothed into the ruling, and a signature given
+    before the round does not stand in for that word;
+  - `INJECTION RATE HIGH` — continue the other batches and list to the owner
+    at closure / stop;
+  - the kill criterion firing — the disposition named above / ask;
+  - one micro-batch beyond the batch limit for a trivially fixable minor of
+    the last pass — allowed / not;
+  - the default sign for a minor of the last permitted pass that is a DoD
+    literal of a closed package or a line of the round's own text — in
+    force / struck.
+
 **Owner signature:** `{name, ISO date}`
 
 ## 7. Residue register carried in
@@ -187,6 +223,13 @@ of taste.
 
 - {path of the recount script}
 - {paths of the round's own gates}
+
+Where an instrument named here cross-checks a ruling, a citation or a count
+against a live record, the entry also names the version or format marker by
+which that record is recognized, so a record that has changed shape is read
+as changed and not as a ruling that was never there; where the record
+carries no such marker, the entry names instead the git-history fallback
+that re-derives the same text from the commit that carried it.
 
 ## 9. Known limitations accepted at authoring time
 

@@ -1,0 +1,50 @@
+# OpenTelemetry Collector configuration for the ALTERNATIVE capture path:
+# for users who already run Docker. What it writes is NOT what the bundled
+# receiver (otel-receiver.py, beside this file) writes: the file exporter
+# below writes the bare OTLP envelope itself, one per line, while the
+# receiver wraps every request in an envelope of its own, adding `v`,
+# `received_at` and `signal` around the body. The reader accepts both and
+# tells them apart by shape: a wrapped line carries `body`, a bare line
+# carries `resourceSpans`, `resourceLogs` or `resourceMetrics` at the top
+# level.
+#
+# The collector listens on 0.0.0.0 INSIDE its container; the port is
+# published to loopback only, by compose.yaml beside this file.
+#
+# Only the http receiver is enabled. The exporter is configured with
+# `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` and never speaks to 4317, and a
+# second open listener would be an open listener for nothing.
+#
+# The file exporter writes one uninterrupted stream on purpose: its
+# file-rolling options split a record at the file boundary and break the
+# JSON (collector-contrib issue 22747). The file grows unbounded; it is
+# machine-local data, and it is yours to trim between rounds.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+exporters:
+  file:
+    path: /out/claude-otel.jsonl
+    format: json
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [file]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [file]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [file]

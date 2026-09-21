@@ -7,10 +7,15 @@ project under review, in a per-run folder:
 .critic-ledger/
   2026-01-15-101502-auth-plan/
     fix-ledger.md      fixed name; the run folder carries the uniqueness
-    precedents.md      created by the ORCHESTRATOR at the first repeated
-                       ruling, never in advance; an empty one never exists
+    precedents.md      created by the ORCHESTRATOR at the first
+                       adjudication batch; never before stage 6, never empty
     critics/           verbatim critic reports
     verify/            verbatim verifier reports
+    probes/            one raw-output file per run of an executor: critics' confirm-or-kill commands, the orchestrator's own probes (6.26) and live criteria
+                       raw command output; the sanitization caveat and the privacy gate below apply
+    scratchpad-cleanup-plan.txt
+                       the dry-run plan of a refused scratchpad cleanup
+                       (stage 9), sanitized; written only on a refusal
 ```
 
 Seconds are part of the folder name on purpose: two rounds on the same
@@ -77,16 +82,12 @@ silent write.
 (`.critic-ledger/<YYYY-MM-DD-HHMMSS-object>/`), with its `critics/`
 and `verify/` subdirectories, and, on the FIRST run in this project,
 tell the user plainly that the folder was created and ignored.
-**(c) Blank ledger** `fix-ledger.md` from `${CLAUDE_PLUGIN_ROOT}/skills/critic-ledger/templates/ledger.md`, created
-in the run folder HERE — before any critic is spawned.
-**With observability on**, create an empty `trace.jsonl` in the run
-folder and append to it, with
-`${CLAUDE_PLUGIN_ROOT}/skills/critic-ledger/templates/trace.py append`,
-the `open` record of the round span `s1.00` (`stage: 1`,
-`parent: null`, actor `orchestrator`, unit `round`) whose `kind: "span"`
-close record is written only at stage 9 — a round interrupted before
-then leaves `s1.00` unclosed and a reader says so rather than inventing
-an end — then write the header lines fixed at stage 0 and fill
-`Round-started` and `Trace:`.
+**(c) Blank ledger** `fix-ledger.md`, created in the run folder HERE —
+before any critic is spawned — by
+`${CLAUDE_PLUGIN_ROOT}/skills/critic-ledger/scripts/ledger_md.py new --template ${CLAUDE_PLUGIN_ROOT}/skills/critic-ledger/templates/ledger.md --out <run-folder>/fix-ledger.md`,
+never by copying the template: the command writes the same skeleton
+WITHOUT the template's instruction comments, which are addressed to
+whoever fills a ledger in and are not part of any round's evidence. It
+refuses an `--out` that already exists rather than overwriting it.
 Output: the run folder in place with its `critics/` and `verify/`
 subdirectories, the ignore entry confirmed, and a blank ledger inside it.

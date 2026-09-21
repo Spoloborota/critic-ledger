@@ -18,7 +18,9 @@
 
 - **Object:** `<repo>/skills/critic-ledger/SKILL.md` plus
   `<repo>/skills/critic-ledger/templates/` (11 files) at `3f2a91c`
-  (illustrative placeholder), 2,140 lines.
+  (illustrative placeholder), 2,140 lines. Of the 11, the nine scripts now
+  live under `<repo>/skills/critic-ledger/scripts/`; the two ledger and
+  prompt skeletons stay under `templates/`.
 - **Round id:** `<run-folder>` (short name `skill-payload`) ·
   **Coordinator:** the orchestrating session · **Date opened:** `2026-08-08`
 - **Mode:** `plan`. The object is a normative document plus the scripts it
@@ -66,7 +68,7 @@ opened.
 | `SKILL.md` stages 0-9, the executable procedure (1-980) | Z2 | Every obligation is read as an instruction a later actor must obey: who acts, when, and what makes the step done. |
 | `SKILL.md` acceptance blocks and quoted exit codes (981-1180) | Z1 | Checked against the scripts by running them; a quoted exit code that the script does not return is a defect, not a wording matter. |
 | `SKILL.md` rationale, history and worked narrative (1181-1420) | Z3 | Read for honesty and for claims that contradict the normative sections; informative by construction. |
-| `templates/` scripts, all nine (1421-2010) | Z1 | Read as contracts and exercised read-only against a scratch copy: argv, stdout, exit codes, filesystem effects. |
+| `templates/` scripts, all nine, now under `scripts/` (1421-2010) | Z1 | Read as contracts and exercised read-only against a scratch copy: argv, stdout, exit codes, filesystem effects. |
 | `templates/` ledger and prompt skeletons, two files (2011-2140) | Z2 | The obligations they place on whoever fills them, and their agreement with the recount's own parsing. |
 
 The table covers the object whole; a zone table that does not partition the
@@ -113,13 +115,13 @@ register, not by reading the register by eye.
 
 ## 8. Declared instrument set
 
-- `../../skills/critic-ledger/templates/recount.py` — every count and every
+- `../../skills/critic-ledger/scripts/recount.py` — every count and every
   closure verdict of this round.
-- `../../skills/critic-ledger/templates/transcribe.py` — the mechanical layout
+- `../../skills/critic-ledger/scripts/transcribe.py` — the mechanical layout
   of findings into ledger rows.
-- `../../skills/critic-ledger/templates/set-cell.py` — every write to a row's
+- `../../skills/critic-ledger/scripts/set-cell.py` — every write to a row's
   `fix`, `verified` and `terminal` cells.
-- `../../skills/critic-ledger/templates/deleted-lines.py` — the deterministic
+- `../../skills/critic-ledger/scripts/deleted-lines.py` — the deterministic
   deleted-line pre-pass before each verification pass.
 
 Anything counted by hand is a breach of this contract, declared in advance so

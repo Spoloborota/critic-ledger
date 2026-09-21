@@ -4,6 +4,8 @@ Every path in this file is given relative to the skill directory ${CLAUDE_PLUGIN
 
 Explicit sub-steps, in this order:
 
+### 2.1 Scope
+
 **(a) Scope.** The orchestrator fixes: the object (paths/commits), mode,
 an id prefix for EACH lens and one for the `NOTICED OUTSIDE BATCH` block
 (assigned here, not by critics; letter-led, letters and digits only —
@@ -18,7 +20,7 @@ stage 6, they do not break the round.
 the only source of the lens count.** The header's `Lenses:` field
 carries, directly under it and with nothing between them, one line per
 lens — ` - <PREFIX> | <lens name> | <model>`, the prefix in the id
-contract's own alphabet. `templates/recount.py` reads `k`, the lens
+contract's own alphabet. `scripts/recount.py` reads `k`, the lens
 count of the residual-defect estimate, from that run of lines and from
 nowhere else; everything softer about a lens (its timebox, `owner-set`,
 a dropped lens) goes in prose BELOW the run, because reading stops at
@@ -47,6 +49,15 @@ first spawn (stage 0's gate). Empty Non-Goals are refused outright: a round
 with none will litigate everything, which is the defect the contract
 exists to stop. The orchestrator then writes the contract's path and sha
 into the ledger header.
+The contract's own candidate lists — residue carried in, known
+limitations, findings the owner already disposed of — reach a lens only
+as part of the contract itself, in either form this section allows: its
+text substituted whole, or the one pointer to its path inside the copy.
+They are never copied into any OTHER file the critics' mandate makes
+them read — not the copy's project rules file, not its README, not a
+companion brief or checklist handed with the prompt — because a critic
+that meets its own expected findings outside the contract is a coverage
+test that measures nothing.
 **The ZONE MAP is fixed here and reaches the ledger header here.** The
 contract's zone map (§4) assigns EVERY section of the object one of three
 zones — `Z1`, mechanically checkable contracts (scripts, acceptance
@@ -73,25 +84,42 @@ pointer to that path INSIDE THE COPY instead of the text, under two
 conditions that must both hold — (a) the path is IDENTICAL for every
 lens, so no lens is pointed at a differently-worded scope, and (b) the
 ledger header carries the contract's sha exactly as it does today, so an
-edit of the contract mid-round stays detectable. Nothing else moves: a
+edit of the contract mid-round stays detectable. Where the contract's own
+location is git-ignored — a project convention such as a local work
+directory, or the run folder itself — the orchestrator PUTS it there:
+after `copy-project.sh` has run, the contract's text is copied byte for
+byte into a file inside the copy (`ROUND-CONTRACT.md` at the copy's root),
+and the sha the header carries is taken of THAT file; the copy script
+never carries it across, so a contract nobody placed leaves the shortcut
+unusable and the TEXT is substituted instead. The placed file is a private
+document: it falls under the project's leak/PII sanitization discipline,
+fail-closed, exactly as a salvaged report does
+(`references/stage-1-run-folder.md`) — where that discipline cannot be run
+on the contract, the file is not placed and the shortcut stays unusable;
+it lives only inside the copy, is never written into the reviewed
+repository, and is removed together with the copy by the closing call of
+9.17, in the two-step form that call carries — a copy that call refuses
+keeps it, and the ledger's `Scratchpad not cleaned` line names that copy,
+in the one-line, sanitized form 9.17 prescribes.
+Nothing else moves: a
 pointer is not a summary, and re-telling, shortening or angling for one
 lens stay forbidden whichever of the two forms is substituted.
 **Amendments inside a running round are numbered or they do not exist.**
 An amendment is dated, numbered `Amendment <n>` and one sentence long
-about what it changes; it is written into the ledger header's
-`Contract amendments:` field and into the contract's own Amendments table.
+about what it changes; it is entered into the ledger header's
+`Contract amendments:` field — written with `scripts/ledger_md.py
+set-header`, never by hand — and into the contract's own Amendments table.
+`set-header` replaces the whole field, so the value written restates
+every earlier `Amendment <n>` entry, in order, followed by the new one; a
+value carrying only the new amendment erases the earlier ones.
 An UNNUMBERED amendment does not take effect — there is nothing to point
 at later. An amendment touching a field the OWNER signed — the Non-Goals,
 the stopping rule, the privacy-gate answer, the models — carries the
 owner's signature in the same machine form residue uses,
 `user-signed <date>`, and is void without it.
-Where observability is on, the wait for that signature is recorded like
-any other: the orchestrator opens an `owner-wait-amendment` span when the
-amendment is put to the owner and closes it on his word, the outcome
-`answered | refused | abandoned`. That reason is bound to no stage — an
-amendment may be raised on ANY stage of the round, the stage it was
-raised on opens and closes the wait, and that stage's number is what goes
-into the span's `stage` field, never this one's.
+
+### 2.2 Lenses — non-overlapping, and their count derived
+
 **(b) Lenses — non-overlapping, and their count DERIVED, never
 assumed.** It equals the number of the object's independent LOAD-BEARING
 hypotheses: a claim whose falsity makes the object unfit (a safety invariant, a
@@ -102,8 +130,8 @@ count. A critical hypothesis does NOT get a second lens of its own: it
 gets 2–3 repeated independent passes over the same hypothesis, and a
 finding counts only when at least two passes agree. The list of
 load-bearing hypotheses is written into the ledger header as the
-justification of the count — a count without the list is invalid — and
-is SHOWN to the user before any critic is spawned; the user may strike
+justification of the count — nothing checks the two against each other —
+and is SHOWN to the user before any critic is spawned; the user may strike
 an item or add one, and that edit IS the mechanism for a user-supplied
 lens, which is added on top of the derived count and MARKED in the
 header as owner-given. Silence counts as consent: the list is already in
@@ -131,15 +159,19 @@ no lens was so declared. The consequence is not a label but a default at
 stage 6: every finding that lens raises is of the security/PII class
 unless the adjudicator removes the default IN WRITING, and the recount
 enforces exactly that.
-**(c) Scratchpad copy.** `${CLAUDE_PLUGIN_ROOT}/skills/critic-ledger/templates/copy-project.sh` makes the copy the
+
+### 2.3 Scratchpad copy
+
+**(c) Scratchpad copy.** `${CLAUDE_PLUGIN_ROOT}/skills/critic-ledger/scripts/copy-project.sh` makes the copy the
 critics read — they work on the COPY, not on the working tree. Strict
 reflink clone first where its pre-flight allows it, then the git-known
 file list (the history is copied
 only for the lenses that declared they need it), then an object-only
-narrowing; symlinks are copied AS LINKS, secret-class files are stripped
-at every step, and every omission is an `EXCLUDED:` line that goes into
-the ledger header — a critic that does not know what it never saw writes
-a lying coverage statement.
+narrowing (what each step keeps and strips, secret-class files included,
+is the script's entry in `references/templates-and-scripts.md`); every
+omission is an `EXCLUDED:` line that goes into the ledger header — a
+critic that does not know what it never saw writes a lying coverage
+statement.
 **The clone runs ONLY when git reports no ignored content under the
 project root.** It copies everything on disk while the file-list step
 copies what git knows, so on a tree that mixes the project with ignored
@@ -170,10 +202,26 @@ every round: the copy is made at
 segments put it exactly at the required depth below the scratchpad root
 — that root, and not the copy, is the directory handed to `--root`, while
 `--run-id` is the last segment, which is also the basename of `--dest`.
-**With observability on**, append one `orchestrator` span for the
-scoping step — `unit: "scoping"`, closing `outcome: "scoped"`. The
-`model_assigned` of each unit is recorded on that unit's OWN span when
-it opens, never here; and the id prefixes fixed at (a) — one per lens,
-plus the round's verifier-prefix stem — are what every later span
-carries in `id_prefix`.
+The two upper segments are the CALLER's duty: the orchestrator creates
+them — `mkdir -p` on the parent of `--dest` — before calling the script,
+which refuses a `--dest` whose parent does not exist and creates only the
+last segment itself.
+
+### 2.4 The round profile
+
+| profile | assigned when | passes | batches |
+|---|---|---|---|
+| **F** (few) | fewer than 8 confirmed findings | second pass skipped by default (9.2), connectedness pass as 8.3 plans it | batches as findings fall under the ceiling of 7.6, plus the tail batch of 7.7 |
+| **M** | 8 to 19 | second pass skipped by default and run on the user's word (9.2); a pass so run may be narrowed residue-scoped under the three conditions of 9.5, whose (c) is the owner's signature (9.6); connectedness pass as 8.3 plans it | batches by zone and kind (7.6) plus the tail batch of 7.7 |
+| **L** | 20 or more | second pass mandatory (9.2), full-scope (8.2) unless that same narrowing is granted (9.5, 9.6), and the connectedness pass of 8.3 | batches by zone and kind (7.6) plus one tail batch of NOTICED minors (7.7) |
+
+The profile is ASSIGNED at the close of stage 6 from the recount's upheld
+count — never from a count made by hand — and written into the ledger
+header as `- Profile:` by the
+orchestrator (no script writes that line); a contract may FIX the profile
+in advance in its stopping rule (§6), and then stage 6 records the fixed
+value. A profile compresses passes and batch granularity only: it changes
+no model, no lens already spawned, no severity route (6.22) and no
+signature the contract requires.
+
 Output: a ledger file with a filled header and the critics' copies made.

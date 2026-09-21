@@ -34,6 +34,7 @@ the list ends at the next `--`-prefixed token or at a bare `--`.
 
 Output (stdout; one line per record, greppable and readable)
 -----------------------------------------------------------
+    REPO <abs-path>
     COMMIT <full-sha> <subject>
     <old-path>:<old-lineno>: <exact text of the deleted line>
     NOTE <path>: <rename / binary / whole-file-deletion / merge mark>
@@ -70,9 +71,11 @@ Usage:  deleted-lines.py [<commit> ...] [--range A..B] [--repo <path>]
                          [--paths <p1> <p2> ...]
 Exit codes: 0 = the listing was produced (including a legitimately empty
 one: `TOTAL DELETED LINES: 0`); 2 = fail-closed error — bad arguments, no
-such repository/commit/range, or a pathspec that matches nothing in any
-of the commits (a silently empty listing from a typo'd path would be the
-worst possible output of this script).
+such repository/commit/range, a `--repo` that has no working tree (a bare
+repository, or a git directory such as `<repo>/.git`), or a pathspec that
+matches nothing in any of the commits (a silently empty listing from a
+typo'd path would be the worst possible output of this script). Nothing
+is printed to stdout before these checks pass.
 
 Read-only by construction: every git invocation goes through `git()`,
 which runs a fixed argument list (no shell) and refuses any subcommand
@@ -82,10 +85,22 @@ outside the read-only allowlist below.
 import re
 import subprocess
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     import io
+
+# The exit-code constants live in ONE place — `scripts/ledger_md.py`,
+# beside this script — so that a code means the same thing everywhere it is
+# returned. The import is resolved from THIS script's own directory: the
+# payload ships loose files and there is no installed package (see
+# `pyproject.toml`), so a copy of these scripts without `ledger_md.py`
+# beside them does not run.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# The import sits below the path insert above, which is what makes it work.
+from ledger_md import EXIT_OK, EXIT_STRUCTURAL
 
 # Read-only git subcommands. Anything else raises: this script must never
 # be able to mutate the repository under review.
@@ -117,7 +132,7 @@ def git(repo: str, *argv: str) -> tuple[int, str, str]:
 def fail(msg: str) -> int:
     """Print an error to stderr and return the fail-closed exit code."""
     print(f"ERROR: {msg}", file=sys.stderr)
-    return 2
+    return EXIT_STRUCTURAL
 
 
 def parse_args(args: list[str]) -> str | tuple[str, list[str], list[str], list[str]]:
@@ -374,7 +389,7 @@ def main() -> int:
     parsed = parse_args(sys.argv[1:])
     if parsed == "help":
         print(__doc__)
-        return 0
+        return EXIT_OK
     if isinstance(parsed, str):
         print(__doc__, file=sys.stderr)
         return fail(parsed)
@@ -386,6 +401,12 @@ def main() -> int:
             f"{repo!r} is not a git repository: "
             f"{err.strip() or 'git rev-parse --git-dir failed'}",
         )
+    rc, out, err = git(repo, "rev-parse", "--show-toplevel")
+    if rc != 0 or not out.strip():
+        return fail(
+            f"{repo!r} has no working tree: "
+            f"{err.strip() or 'git rev-parse --show-toplevel failed'}",
+        )
 
     shas, problem = resolve_commits(repo, commits, ranges)
     if problem:
@@ -394,6 +415,7 @@ def main() -> int:
     problem = check_paths(repo, shas, paths)
     if problem:
         return fail(problem)
+    print(f"REPO {out.strip()}")
 
     # stdout must carry the diff's bytes through unchanged.
     cast("io.TextIOWrapper", sys.stdout).reconfigure(errors="surrogateescape")
@@ -443,7 +465,7 @@ def main() -> int:
             f"NOTE: {merges} of the {len(shas)} commits are merges and were "
             f"NOT expanded — the total above does not cover them.",
         )
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

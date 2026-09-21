@@ -1,0 +1,22 @@
+# Compose file for the ALTERNATIVE capture path (Docker). One service, one
+# published port, two mounts:
+#
+#   export CRITIC_LEDGER_OTEL_DIR=<a directory OUTSIDE any repository>
+#   docker compose -f compose.yaml up -d
+#
+# The image tag is a PIN, never `latest`: a floating tag would change the
+# component under a round without a diff. Re-pin it deliberately — read the
+# tag your first `docker pull` resolves and write that literal here.
+#
+# The port is published to 127.0.0.1 only: nothing outside this machine can
+# reach the collector.
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    ports:
+      - "127.0.0.1:4318:4318"
+    volumes:
+      - ./collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ${CRITIC_LEDGER_OTEL_DIR}:/out
+    restart: unless-stopped

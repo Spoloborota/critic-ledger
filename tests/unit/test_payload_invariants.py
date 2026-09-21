@@ -3,28 +3,13 @@
 Everything else in `tests/unit/` drives a script through a subprocess and
 pins its observable behavior. Claims that are not behavior of any single
 script but properties of the payload as a whole are enforced here instead.
-The three it started from are the claims of the 0.2.0 observability work:
+One of the ones it started from is:
 
-* **No network primitive exists in the payload.** The gate is one command
-  over `templates/*.py`, so it is checked over the whole directory here.
-  `test_trace.py` and `test_rollup.py` already assert it on their own
-  script; neither of them can fail when a network import appears in a
-  third file.
-* **No shell-out that could reach a network.** The constraint names three
-  scripts (`trace.py`, `rollup.py`, `recount.py`) and exempts the two that
-  legitimately shell out today (`copy-project.sh`, and `deleted-lines.py`
-  via git). `recount.py` is the one of the three that had no such
-  assertion anywhere.
-* **The SKILL.md stage sentences.** Every stage of the stage machine
-  carries an observability instruction; the skill spells them out as ten
-  `**With observability on**` sentences, one per stage 0-9. A stage that
-  silently loses its sentence is a hole in the trace that no script-level
-  test can see. A stage body lives either inline in the router or in a
-  `references/stage-*.md` file beside it, and the sweep covers both.
+* **The SKILL.md stage machine.** Stages 0-9 exist, in order, with nothing
+  renumbered or dropped. A stage body lives either inline in the router or
+  in a `references/stage-*.md` file beside it, and the sweep covers both.
 
-All three read the shipped files from `scripts_dir` / the repository root,
-so they hold for a copy of the payload (`CRITIC_LEDGER_SCRIPTS_DIR`)
-exactly as they hold for the tree the suite lives in.
+It reads the shipped files from the repository root.
 """
 
 from __future__ import annotations
@@ -34,27 +19,18 @@ import re
 
 import pytest
 
-from conftest import REPO_ROOT
-
-# The network gate's own token list, verbatim. The bare words `curl`,
-# `wget` and `http` are deliberately NOT here: `validate-report.py`
-# mentions them as text about commands, and a gate that flagged text
-# would be switched off within a week.
-NETWORK_TOKENS = (
-    "urllib",
-    "requests",
-    "socket",
-    "ftplib",
-    "smtplib",
-    "http.client",
+from conftest import (
+    BINARY_SUFFIXES,
+    HEADER_7,
+    HEADER_8,
+    HEADER_9,
+    MODULE_NAMES,
+    NON_SOURCE_DIRS,
+    REPO_ROOT,
+    text_of,
 )
+from prose_pins import PROSE_PINS
 
-# The three scripts under the no-subprocess constraint.
-NO_SUBPROCESS_SCRIPTS = ("trace.py", "rollup.py", "recount.py")
-
-# The two exempted by name, so this file records the exemption
-# instead of leaving it as an unexplained absence.
-SHELL_OUT_EXEMPT = ("deleted-lines.py",)
 
 SKILL_MD = REPO_ROOT / "skills" / "critic-ledger" / "SKILL.md"
 REFERENCES_DIR = REPO_ROOT / "skills" / "critic-ledger" / "references"
@@ -64,7 +40,6 @@ REFERENCES_DIR = REPO_ROOT / "skills" / "critic-ledger" / "references"
 STAGE_0 = REFERENCES_DIR / "stage-0-prerequisites.md"
 STAGE_1 = REFERENCES_DIR / "stage-1-run-folder.md"
 STAGE_2 = REFERENCES_DIR / "stage-2-scope-and-lenses.md"
-STAGES_3_5 = REFERENCES_DIR / "stages-3-5-critics-salvage-layout.md"
 STAGE_6 = REFERENCES_DIR / "stage-6-adjudication.md"
 STAGE_7 = REFERENCES_DIR / "stage-7-fix-batches.md"
 STAGE_8 = REFERENCES_DIR / "stage-8-verification.md"
@@ -75,7 +50,6 @@ TEMPLATES_REF = REFERENCES_DIR / "templates-and-scripts.md"
 # Principles 1-3 and 5-7 of the contract in full: the router keeps their
 # headline sentences, principle 4 and the severity taxonomy.
 CONTRACT_LONG_FORM = REFERENCES_DIR / "contract-long-form.md"
-OBSERVABILITY_MARKER = "**With observability on**"
 STAGE_MACHINE_HEADING = "## Stage machine"
 STAGE_START_RE = re.compile(r"^(\d+)\. \*\*")
 # The binding heading form of a stage opener in a `references/stage*.md`
@@ -84,64 +58,7 @@ STAGE_START_RE = re.compile(r"^(\d+)\. \*\*")
 STAGE_FILE_HEADING_RE = re.compile(r"^## Stage (\d+) — ")
 
 
-# --- the network gate over the whole payload -------------------------------
-
-
-def test_no_template_script_imports_a_network_primitive(scripts_dir):
-    """The network gate over `templates/*.py`, as one sweep."""
-    offenders = []
-    for path in sorted(scripts_dir.glob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        offenders += [
-            f"{path.name}: {token}" for token in NETWORK_TOKENS if token in text
-        ]
-    assert offenders == []
-
-
-def test_the_gate_covers_every_python_file_that_ships(scripts_dir):
-    """The gate is only worth its exit code if it sees the whole directory.
-
-    A new script added to `templates/` without a test of its own is still
-    read by the sweep above; this pins that the sweep is not silently
-    matching nothing, and that it reaches the three named scripts.
-    """
-    seen = {path.name for path in scripts_dir.glob("*.py")}
-    assert seen >= {
-        "check-frontmatter.py",
-        "cleanup-scratchpad.py",
-        "deleted-lines.py",
-        "recount.py",
-        "rollup.py",
-        "set-cell.py",
-        "trace.py",
-        "transcribe.py",
-        "validate-report.py",
-    }
-
-
-# --- no shell-out from the three named scripts -----------------------------
-
-
-@pytest.mark.parametrize("script", NO_SUBPROCESS_SCRIPTS)
-def test_the_named_scripts_contain_no_subprocess_at_all(scripts_dir, script):
-    """A normative constraint on two, a preserved property of the third."""
-    text = (scripts_dir / script).read_text(encoding="utf-8")
-    assert "subprocess" not in text
-    for shell_exec in ("os.system", "os.popen", "os.execv", "os.spawn"):
-        assert shell_exec not in text, shell_exec
-
-
-@pytest.mark.parametrize("script", SHELL_OUT_EXEMPT)
-def test_the_exempt_script_still_shells_out_only_through_a_fixed_argv(
-    scripts_dir, script
-):
-    """The exemption is for git through a list argv, never through a shell."""
-    text = (scripts_dir / script).read_text(encoding="utf-8")
-    assert "import subprocess" in text
-    assert "shell=True" not in text
-
-
-# --- SKILL.md: one observability sentence per stage -------------------------
+# --- SKILL.md: the stage machine, stage by stage ---------------------------
 
 
 def stage_blocks() -> list[tuple[int, list[str]]]:
@@ -194,42 +111,14 @@ def test_the_stage_machine_has_ten_stages_numbered_zero_through_nine():
     assert [number for number, _ in stage_blocks()] == list(range(10))
 
 
-def test_every_stage_carries_exactly_one_observability_sentence():
-    """Ten observability markers, one per stage — not ten anywhere in the file."""
-    per_stage = {
-        number: sum(line.count(OBSERVABILITY_MARKER) for line in body)
-        for number, body in stage_blocks()
-    }
-    assert per_stage == dict.fromkeys(range(10), 1)
-
-
-def test_the_file_carries_no_observability_marker_outside_the_stage_machine():
-    """The count over the router and its references is ten, and all ten are
-    stage sentences."""
-    texts = [SKILL_MD.read_text(encoding="utf-8")]
-    if REFERENCES_DIR.is_dir():
-        texts += [
-            path.read_text(encoding="utf-8")
-            for path in sorted(REFERENCES_DIR.glob("*.md"))
-        ]
-    total = sum(text.count(OBSERVABILITY_MARKER) for text in texts)
-    assert total == 10
-    inside = sum(
-        line.count(OBSERVABILITY_MARKER)
-        for _, body in stage_blocks()
-        for line in body
-    )
-    assert inside == 10
-
-
 # --- every shipped template is named in the Templates section ---------------
 #
 # The stage machine addresses a template by its full substituted path, and the
 # Templates section is where a reader learns what each one IS. A template that
 # ships without an entry there is invisible: nobody reading the skill knows it
 # exists, and nobody editing the skill knows it has to be kept in step. The
-# sweep is over the directory, so it covers a template added by a later batch
-# without any edit here.
+# sweep is over both directories — the scripts and the prompts and skeletons —
+# so it covers a file added to either by a later batch without any edit here.
 
 
 def templates_section() -> str:
@@ -237,28 +126,20 @@ def templates_section() -> str:
     return TEMPLATES_REF.read_text(encoding="utf-8")
 
 
-def test_every_shipped_template_is_named_in_the_templates_section(scripts_dir):
+def test_every_shipped_template_is_named_in_the_templates_section(
+    scripts_dir, templates_dir,
+):
     section = templates_section()
-    shipped = sorted(p.name for p in scripts_dir.iterdir() if p.is_file())
-    assert shipped, "no templates found — wrong directory?"
-    assert [name for name in shipped if f"templates/{name}" not in section] == []
-
-
-def test_the_round_contract_template_ships_and_is_self_contained(scripts_dir):
-    """The round-contract template: it exists, and it carries its two
-    signature blocks.
-
-    The two blocks are what the stage-0 gate checks for, and the two numbers
-    in it are marked as OURS rather than borrowed — the file has to say so
-    itself, because it is copied out of the plugin and read on its own.
-    """
-    text = (scripts_dir / "round-contract.md").read_text(encoding="utf-8")
-    assert text.count("(OWNER SIGNS)") == 2
-    assert text.count("Owner signature:") == 2
-    assert "out-of-scope-by-contract" in text
-    assert "400 LINES" in text
-    assert "HALF AN HOUR" in text
-    assert "Amendment" in text
+    scripts = sorted(p.name for p in scripts_dir.iterdir() if p.is_file())
+    templates = sorted(p.name for p in templates_dir.iterdir() if p.is_file())
+    # Fail-closed per directory: one of them read empty must not pass on the
+    # files of the other.
+    assert scripts, "no scripts found — wrong directory?"
+    assert templates, "no templates found — wrong directory?"
+    shipped = [f"scripts/{name}" for name in scripts] + [
+        f"templates/{name}" for name in templates
+    ]
+    assert [path for path in shipped if path not in section] == []
 
 
 # The two shapes in which a shipped file claims that some content LIVES in
@@ -312,10 +193,6 @@ VERIFIER_AGENT = AGENTS_DIR / "verifier.md"
 PREMISE_OUTCOME = "premise-not-found"
 
 
-def text_of(path):
-    return path.read_text(encoding="utf-8")
-
-
 def flat(path):
     """The file's text, lower-cased with its line wrapping collapsed.
 
@@ -327,82 +204,47 @@ def flat(path):
     return re.sub(r"\s+", " ", text_of(path)).lower()
 
 
-def test_the_fixer_reproduces_the_defect_before_editing(scripts_dir):
-    """Stated in the agent definition and in the prompt that spawns it."""
-    agent = flat(FIXER_AGENT)
-    assert "reproduce the defect before editing" in agent
-    assert "stop if the premise does not hold" in agent
-    prompt = text_of(scripts_dir / "fixer-prompt.md")
-    assert "REPRODUCE THE DEFECT BEFORE YOU EDIT" in prompt
-
-
-def test_the_back_channel_has_three_outcomes_everywhere_it_is_named(scripts_dir):
+def test_the_back_channel_has_three_outcomes_everywhere_it_is_named(templates_dir):
     """A vocabulary that differs between the fixer's texts is no vocabulary."""
     for path in (
         FIXER_AGENT,
-        scripts_dir / "fixer-prompt.md",
+        templates_dir / "fixer-prompt.md",
         STAGE_7,
         TEMPLATES_REF,
     ):
         body = text_of(path)
         assert PREMISE_OUTCOME in body, path.name
         assert "criterion-unworkable" in body, path.name
-    prompt = text_of(scripts_dir / "fixer-prompt.md")
+    prompt = text_of(templates_dir / "fixer-prompt.md")
     assert "exactly one per id, and there are exactly three" in prompt
     assert "no third option" not in prompt
 
 
-def test_the_second_return_of_an_id_is_never_a_third_fix(scripts_dir):
-    """The limit is counted per id and both non-terminal outcomes share it."""
-    stage_seven = flat(STAGE_7)
-    assert "at most twice" in stage_seven
-    assert "returned:<n>" in stage_seven
-    assert "nominating a blocker is banned outright" in stage_seven
-
-
-def test_the_verifier_is_not_shown_the_fixers_justification(scripts_dir):
+def test_the_verifier_is_not_shown_the_fixers_justification(templates_dir):
     """Stated in the agent definition and in the prompt template."""
     assert "not shown the fixer's justification" in flat(VERIFIER_AGENT)
-    prompt = text_of(scripts_dir / "verifier-prompt.md")
+    prompt = text_of(templates_dir / "verifier-prompt.md")
     assert "WHAT YOU ARE DELIBERATELY NOT GIVEN" in prompt
     assert "would a fresh critic still file here?" in prompt
 
 
 def test_the_verifier_prompt_carries_no_placeholder_for_a_fixer_report(
-    scripts_dir,
+    templates_dir,
 ):
     """The rule is mechanical here: a placeholder is what would break it."""
     placeholders = set(
-        re.findall(r"\{([a-z_]+)\}", text_of(scripts_dir / "verifier-prompt.md"))
+        re.findall(r"\{([a-z_]+)\}", text_of(templates_dir / "verifier-prompt.md"))
     )
     assert placeholders
     assert [name for name in placeholders if "fixer" in name] == []
 
 
-def test_a_number_matching_is_not_a_mechanism_matching(scripts_dir):
+def test_a_number_matching_is_not_a_mechanism_matching(templates_dir):
     """Stated in the verifier's mandate and in its definition."""
-    for path in (VERIFIER_AGENT, scripts_dir / "verifier-prompt.md"):
+    for path in (VERIFIER_AGENT, templates_dir / "verifier-prompt.md"):
         body = flat(path)
         assert "mechanism matching" in body, path.name
         assert "direction of a rule" in body, path.name
-
-
-def test_the_clean_pass_qualification_and_its_seniority_are_stated():
-    """A qualified pair, any terminal close, and seniority over the 20."""
-    stage_nine = flat(STAGE_9)
-    assert "the pair is qualified where the round ever had a marked row" in (
-        stage_nine
-    )
-    assert "closed by the pass's own hands" in stage_nine
-    assert "the qualification is senior to that threshold" in stage_nine
-
-
-def test_the_sustained_rate_is_never_read_alone():
-    """The framing tightening is a PAIRED condition, said in words."""
-    stage_nine = flat(STAGE_9)
-    assert "per-lens sustained rate" in stage_nine
-    assert "the condition is paired" in stage_nine
-    assert "shelf share" in stage_nine
 
 
 def test_the_security_recheck_is_made_by_another_actor_and_blinded():
@@ -419,22 +261,7 @@ def test_the_security_recheck_is_made_by_another_actor_and_blinded():
     assert "never the ruling's rationale" in flat(STAGE_9)
 
 
-def test_the_first_run_ignore_entry_waits_for_the_users_word():
-    """Stage 1(a): consent, or fail-closed — and silence is not consent."""
-    stage_one = flat(STAGE_1)
-    assert "explicit word, never silently" in stage_one
-    assert "silence is not consent" in stage_one
-    assert "the run folder is not created" in stage_one
-
-
-def test_degraded_snapshots_are_named_and_live_inside_the_run_folder():
-    """The one piece of the snapshot rule in this release, with its path."""
-    stage_zero = text_of(STAGE_0)
-    assert ".critic-ledger/<run>/fix-batch-<n>-{before,after}/" in stage_zero
-    assert "BANNED" in stage_zero
-    assert "never reused and never overwritten" in flat(STAGE_0)
-
-
+# kept as code: (i) `security` is counted in one table line, not a file
 def test_security_is_an_example_lens_in_both_modes():
     """The directive's smallest item, and the easiest to lose in a table edit."""
     skill = text_of(SKILL_MD)
@@ -452,9 +279,29 @@ def test_security_is_an_example_lens_in_both_modes():
 # applying, and no script-level test can see that from inside one file.
 
 TEMPLATES_DIR = REPO_ROOT / "skills" / "critic-ledger" / "templates"
+SCRIPTS_DIR = REPO_ROOT / "skills" / "critic-ledger" / "scripts"
 LEDGER_TEMPLATE = TEMPLATES_DIR / "ledger.md"
 CONTRACT_TEMPLATE = TEMPLATES_DIR / "round-contract.md"
-RECOUNT_SCRIPT = TEMPLATES_DIR / "recount.py"
+RECOUNT_SCRIPT = SCRIPTS_DIR / "recount.py"
+# The recount is one entry point and the modules it is split into; a check
+# of "the script's" vocabulary reads them all as one text, so a literal that
+# moved into a module is still found and a stray one there still fails. The
+# modules are derived from `MODULE_NAMES`, the list the presence check reads,
+# so a module added there cannot stay out of these gates; `ledger_md.py` is
+# left out because it is the grammar every script shares, not a part of the
+# recount.
+RECOUNT_SOURCES = (
+    RECOUNT_SCRIPT,
+    *(SCRIPTS_DIR / name for name in MODULE_NAMES if name != "ledger_md.py"),
+)
+
+
+def text_of_source(path):
+    """A file's text; for the recount, its entry point and modules together."""
+    if path == RECOUNT_SCRIPT:
+        return "\n".join(text_of(source) for source in RECOUNT_SOURCES)
+    return text_of(path)
+
 
 # The seven canonical terminal statuses. A status the recount closes on and
 # no shipped prose names is a rule nobody can follow.
@@ -474,7 +321,7 @@ ZONE_LITERALS = ("Z1", "Z2", "Z3")
 def test_every_terminal_status_is_named_in_the_skill_and_the_template(status):
     """The script's vocabulary and the shipped paper's are the same list."""
     for path in (SKILL_MD, CONTRACT_LONG_FORM, LEDGER_TEMPLATE, RECOUNT_SCRIPT):
-        assert status in text_of(path), f"{status} missing from {path.name}"
+        assert status in text_of_source(path), f"{status} missing from {path.name}"
 
 
 @pytest.mark.parametrize("zone", ZONE_LITERALS)
@@ -489,7 +336,7 @@ def test_the_three_zones_are_named_wherever_the_axis_is_used(zone):
         CONTRACT_TEMPLATE,
         RECOUNT_SCRIPT,
     ):
-        assert zone in text_of(path), f"{zone} missing from {path.name}"
+        assert zone in text_of_source(path), f"{zone} missing from {path.name}"
 
 
 def test_no_fourth_zone_was_invented():
@@ -506,12 +353,12 @@ def test_no_fourth_zone_was_invented():
         CONTRACT_TEMPLATE,
         RECOUNT_SCRIPT,
     ):
-        text = text_of(path)
+        text = text_of_source(path)
         for stray in ("Z4", "Z5", "Z6"):
             assert stray not in text, f"{stray} in {path.name}"
     # And the script's own vocabulary is the same three, in one tuple.
     assert 'ZONES = (ZONE_MECHANICAL, ZONE_NORMATIVE, ZONE_INFORMATIVE)' in (
-        text_of(RECOUNT_SCRIPT)
+        text_of_source(RECOUNT_SCRIPT)
     )
 
 
@@ -572,12 +419,10 @@ def test_stage_nine_closes_the_ledger_state_header():
     )
 
 
+# kept as code: it asserts absence (not in); the registry pins present phrases
 def test_old_run_addresses_may_be_relocated_by_the_project():
-    """Both lawful outcomes, and no address of the plugin's own repo."""
+    """No unconditional promise, and no address of the plugin's own repo."""
     stage_one = flat(STAGE_1)
-    assert "are not moved automatically" in stage_one
-    assert "a project may relocate them itself" in stage_one
-    assert "the new address governs new runs" in stage_one
     # The unconditional promise the shipped text used to make, and the
     # out-of-tree address that must never reach the product.
     assert "are not migrated" not in stage_one
@@ -585,50 +430,6 @@ def test_old_run_addresses_may_be_relocated_by_the_project():
     assert ".critic-ledger/legacy" not in text_of(SKILL_MD)
     for path in sorted(REFERENCES_DIR.glob("*.md")):
         assert ".critic-ledger/legacy" not in text_of(path), path.name
-
-
-def test_a_do_not_touch_fence_traces_to_the_batchs_own_plan():
-    """An edit-scope fence with no collision note is an orchestrator bug."""
-    stage_seven = flat(STAGE_7)
-    assert "a do-not-touch fence in that prompt is traceable to this batch's"\
-        " plan" in stage_seven
-    assert "the plan of the same batch carries the collision note" in stage_seven
-    assert "lifted before the fixer is spawned" in stage_seven
-
-
-# The pointwise sentences below are asserted against the file that now HOLDS
-# each of them — the stage whose body carries it.
-# `probe-to-criterion` is named in two stages, so its literal is asserted once
-# per stage rather than once per file.
-STANDALONE_LITERALS = (
-    (STAGE_6, "A design fork goes to the owner: it is never closed by an"
-              " adjudication verdict."),
-    (STAGE_6, "The orchestrator's own probe run before adjudication is"
-              " named `probe-to-criterion`: the probe becomes a class-L1"
-              " criterion, and the verifier re-executes it live."),
-    (STAGE_8, "A class-L1 criterion born as a `probe-to-criterion` is"
-              " re-executed live by the verifier, never read off the"
-              " fixer's report"),
-    (STAGES_3_5, "Verbatim salvage outranks local formatting and lint hooks:"
-                 " where the environment physically prevents writing the text,"
-                 " writing past the hook is part of the stage, not"
-                 " improvisation — except a hook that blocks on CONTENT (a"
-                 " secret or credential scanner), which is never written past:"
-                 " its block is raised as a finding of the round."),
-    (STAGES_3_5, "An agent that died on a server error has no report:"
-                 " fragments are never salvaged, the stage is respawned with a"
-                 " fresh actor, and one line of fact goes into the ledger."),
-    (STAGE_6, "Before adjudicating a new refutation the orchestrator checks"
-              " the run's own `precedents.md`: the file is an INPUT"
-              " document of the round, not only an output."),
-    (VERIFIER_PROMPT, "Deviations from the pass instruction (if any) and"
-                      " why."),
-)
-
-
-@pytest.mark.parametrize(("path", "literal"), STANDALONE_LITERALS)
-def test_the_pointwise_insertions_are_present(path, literal):
-    assert literal.lower() in flat(path), f"{literal[:40]}… missing"
 
 
 def test_probe_to_criterion_is_named_in_both_stage_six_and_stage_eight():
@@ -641,32 +442,13 @@ def test_probe_to_criterion_is_named_in_both_stage_six_and_stage_eight():
     assert "probe-to-criterion" in text_of(STAGE_8)
 
 
-def test_the_verifier_prompts_deviation_field_is_not_optional():
-    """A report FIELD, not a section left to the agent's initiative."""
-    prompt = flat(VERIFIER_PROMPT)
-    assert "one further field is mandatory and is not a section left to your"\
-        " initiative" in prompt
-    assert "write it even when it is empty" in prompt
-
-
 # --- four more standalone rules of the same kind ---------------------------
 # Each of the four is a SENTENCE in shipped paper, spread across two to four
 # files at once. A rule that survives in one file and is reworded out of the
 # others has silently stopped applying, and nothing script-level can see it.
 
-PASSES_HEADER_PREFIX = "| # | pass (scope)"
 NOTICED_BLOCK = "NOTICED OUTSIDE BATCH"
 ID_OUTCOMES = ("criterion-unworkable", PREMISE_OUTCOME)
-
-
-def passes_header_cells() -> list[str]:
-    """The shipped passes table's header, cell by cell."""
-    header = next(
-        line
-        for line in text_of(LEDGER_TEMPLATE).splitlines()
-        if line.startswith(PASSES_HEADER_PREFIX)
-    )
-    return [cell.strip() for cell in header.strip().strip("|").split("|")]
 
 
 def test_the_lens_split_verification_pass_is_named_where_it_is_used():
@@ -685,28 +467,6 @@ def test_the_lens_scope_placeholder_exists_and_is_named_in_templates():
     assert "{lens_scope}" in text_of(TEMPLATES_REF)
 
 
-def test_a_lens_split_pass_is_full_scope_only_without_overlap_or_hole():
-    """The union rule is what stops a split from losing an id."""
-    stage_eight = flat(STAGE_8)
-    assert "with no overlap and no hole" in stage_eight
-    assert "the freshness rule above applies to every one of them by name" in (
-        stage_eight
-    )
-
-
-def test_the_passes_table_carries_the_verifier_count_column():
-    """The count is a column, and it moves no cell any reader addresses."""
-    cells = passes_header_cells()
-    assert "verifiers" in cells
-    # `new findings` keeps index 3 (the recount's positional fallback) and
-    # `started`/`ended` keep their place as the last two columns.
-    assert cells.index("new findings") == 3
-    assert cells[-2:] == ["started", "ended"]
-    assert "`verifiers` = how many verifiers the pass had" in text_of(
-        LEDGER_TEMPLATE
-    )
-
-
 def test_a_deduplicated_row_reaches_the_verifier_with_the_full_criterion():
     """The briefing carries the primary row's criterion, not a pointer."""
     assert "=<primary-id>" in text_of(STAGE_8)
@@ -714,11 +474,6 @@ def test_a_deduplicated_row_reaches_the_verifier_with_the_full_criterion():
     prompt = text_of(VERIFIER_PROMPT)
     assert "=<primary-id>" in prompt
     assert "substituted IN FULL" in prompt
-
-
-def test_the_full_criterion_rule_is_not_a_property_of_the_split_mode():
-    """A rule about the verifier's canon, so it holds on an unsplit pass."""
-    assert "it holds on an unsplit pass too" in flat(STAGE_8)
 
 
 def test_executing_a_criterion_is_the_orchestrators_duty_not_the_fixers():
@@ -735,23 +490,6 @@ def test_executing_a_criterion_is_the_orchestrators_duty_not_the_fixers():
     assert (
         "a criterion that requires execution is not yours to satisfy"
         in flat(FIXER_AGENT)
-    )
-
-
-def test_the_verifier_definition_carries_the_stage_seven_read_back():
-    """A second, narrow duty at its own moment, distinct from stage 8."""
-    verifier = flat(VERIFIER_AGENT)
-    assert "read-back" in verifier
-    assert "pre-commit read-back of stage 7" in verifier
-    assert "no per-id verdicts and you walk no deleted lines" in verifier
-
-
-def test_the_read_only_constraint_carves_out_the_read_backs_one_command():
-    """The bullet that forbids writing says what the read-back may run."""
-    assert (
-        "the criterion's one command — a tool the round declared, or the"
-        " probe recorded at adjudication as the criterion — may be executed"
-        in flat(VERIFIER_AGENT)
     )
 
 
@@ -775,13 +513,6 @@ def test_the_noticed_block_is_never_a_fourth_per_id_outcome():
     assert "this is a report block, not a per-id outcome" in flat(STAGE_7)
 
 
-def test_the_noticed_block_routes_to_stage_six_and_never_into_a_batch():
-    """Same route as a verifier's new findings, and no shortcut."""
-    stage_seven = flat(STAGE_7)
-    assert "travel to stage 6 as new findings" in stage_seven
-    assert "never straight into the next fix batch" in stage_seven
-
-
 def test_the_fixer_prompt_carries_the_noticed_prefix_placeholder():
     """The block's id prefix is the orchestrator's, assigned at stage 2."""
     placeholders = set(re.findall(r"\{([a-z_]+)\}", text_of(FIXER_PROMPT)))
@@ -794,16 +525,7 @@ def test_the_fixer_prompt_carries_the_noticed_prefix_placeholder():
 # their wording can be pinned — and for the copy the wording is what tells
 # the orchestrator that the copy it just made is a SHARED one.
 
-COPY_SCRIPT = TEMPLATES_DIR / "copy-project.sh"
-
-
-def test_stage_two_makes_the_strict_clone_conditional():
-    """The clone is gated on git reporting no ignored content."""
-    stage_two = flat(STAGE_2)
-    assert "the clone runs only when git reports no ignored content under"\
-        " the project root" in stage_two
-    assert "fail-closed on both conditions" in stage_two
-    assert "has no opt-out flag" in stage_two
+COPY_SCRIPT = SCRIPTS_DIR / "copy-project.sh"
 
 
 def test_stage_two_no_longer_promises_a_copy_per_critic_unconditionally():
@@ -814,13 +536,6 @@ def test_stage_two_no_longer_promises_a_copy_per_critic_unconditionally():
     # The unconditional promise the shipped text used to make.
     assert "one copy per critic when reflink works" not in stage_two
     assert "one copy per critic when reflink works" not in flat(SKILL_MD)
-
-
-def test_stage_two_states_the_run_id_rule_the_script_enforces():
-    """A divergent run id makes the copy unremovable at teardown."""
-    stage_two = flat(STAGE_2)
-    assert "must equal the basename of `--dest`" in stage_two
-    assert "condition 7" in stage_two
 
 
 def test_the_copy_script_gates_the_clone_and_refuses_a_divergent_run_id():
@@ -836,211 +551,19 @@ def test_the_copy_script_gates_the_clone_and_refuses_a_divergent_run_id():
     assert 'die "cannot remove $rel from the copy"' not in script
 
 
-def test_the_copy_script_offers_no_way_to_force_the_clone():
-    """An opt-out flag would make the gate decorative."""
-    script = text_of(COPY_SCRIPT)
-    for flag in ("--fast-clone", "--force-clone", "--no-preflight",
-                 "--skip-preflight"):
-        assert flag not in script, flag
+# The closing script's own refusal, quoted in the closure stage so the
+# reader meets it before the script prints it.
+FROZEN_REFUSAL = "LEDGER IS FROZEN"
 
 
-def test_stage_nine_names_the_residue_scoped_second_pass():
-    """The third mode of the second verification pass.
+def test_stage_nine_states_the_frozen_refusal():
+    """The closure stage quotes the refusal the closing script prints.
 
-    The stage-9 body is a file of its own now, so the slice that used to
-    carve it out of the router is the file boundary itself.
+    A reader who meets the refusal only as script output has no text that
+    says what a superseded ledger is, so the literal is stated in the
+    stage that closes the round.
     """
-    assert "`residue-scoped second pass`" in flat(STAGE_9)
-
-
-def test_the_residue_scoped_pass_lists_all_three_conditions():
-    """Three conditions, and the binary rule back if any is missing."""
-    stage_nine = flat(STAGE_9)
-    assert "only when all three conditions hold at once" in stage_nine
-    assert "(a) pass 1 was full-scope in the sense of stage 8" in stage_nine
-    assert "(b) pass 1 returned 0 not landed on the round's original ids"\
-        in stage_nine
-    assert "(c) an explicit owner signature exists for this round, written"\
-        " into the ledger verbatim" in stage_nine
-    assert "absence of any one of the three returns the binary rule above"\
-        in stage_nine
-
-
-def test_the_residue_scoped_pass_is_never_narrowed_without_a_signature():
-    """A right, not a default — and no other actor may grant it."""
-    stage_nine = flat(STAGE_9)
-    assert "the narrowing is a right, not a default" in stage_nine
-    assert "without the owner's signature in the ledger the second pass is"\
-        " executed in full" in stage_nine
-    assert "no other actor may grant the narrowing" in stage_nine
-
-
-# --- one finding-id contract across the payload ----------------------------
-#
-# The finding-id pattern is a CONTRACT, not a local convenience: an id the
-# recount accepts and the rollup silently drops is a divergence nobody sees
-# until a printed number is wrong, and it has already happened twice — once
-# in `transcribe.py`, once in `rollup.py` and `trace.py` together. Nothing
-# executes a contract that lives as five separate literals, so this is the
-# gate: the pattern is read out of the SOURCE TEXT of each script (the
-# scripts are never imported — they are CLIs, and importing them would run
-# their argument handling) and the bodies must be identical.
-#
-# `set-cell.py` is read for the same reason the network sweep reads every
-# file: it carries no id pattern today — it compares the id cell literally —
-# and if a later edit gives it one, the absence assertion below fails and
-# the new literal has to join the contract rather than start a sixth copy.
-#
-# `validate-report.py` is the ONE deliberate exception, and it is asserted AS
-# an exception: its narrower single-segment form, plus the comment that says
-# so. An exception with no comment is indistinguishable from a drift, which
-# is the whole defect this test exists to catch.
-
-# The module-level constant each script names its id pattern with; `None`
-# where the script carries no id pattern at all.
-ID_PATTERN_CONSTANT = {
-    "recount.py": "ID_RE",
-    "transcribe.py": "ID",
-    "rollup.py": "ID_RE",
-    "trace.py": "FINDING_ID_RE",
-    "set-cell.py": None,
-}
-# The documented extraction: a module-level assignment of that constant to a
-# raw string, bare or wrapped in `re.compile(`, the pattern being the first
-# double-quoted raw literal on the line.
-ID_ASSIGNMENT_TEMPLATE = r'^{name} = (?:re\.compile\()?r"([^"]*)"'
-# The character class every id pattern in this payload is built from. Its
-# absence is what "carries no id pattern" means mechanically.
-ID_ALPHABET = "[A-Za-z][A-Za-z0-9]"
-# The narrower form `validate-report.py` documents, and the sentence that
-# documents it.
-NARROWER_ID_BODY = r"([A-Za-z][A-Za-z0-9]*)-(\d+)"
-NARROWER_IS_DELIBERATE = "The narrower form is deliberate here"
-NARROWER_NAMES_THE_COMPOSITE = (
-    "additionally accepts a dash-joined composite prefix (`V-CIT-1`)"
-)
-# The SECOND literal that states the same contract: the `=<primary-id>`
-# pointer a duplicate row carries in its criterion cell. `recount.py` reads
-# it behind the closure gate and `rollup.py` reads it for its own count, so a
-# widening applied to one and not the other makes the two disagree about one
-# cell — which is how this divergence recurred after the id patterns were
-# aligned.
-DUPLICATE_POINTER_CONSTANT = "DUPLICATE_OF_RE"
-DUPLICATE_POINTER_SCRIPTS = ("recount.py", "rollup.py")
-# The same extraction as above, except the raw string may sit on the line
-# after `re.compile(` — both scripts write the literal wrapped.
-DUPLICATE_ASSIGNMENT_TEMPLATE = r'^{name} = re\.compile\(\s*r"([^"]*)"'
-
-
-def id_pattern_body(scripts_dir, script: str, constant: str) -> str:
-    """The script's id-pattern literal, anchors and `(?P<id>…)` removed.
-
-    The five literals are written in three shapes — anchored (`^…$`), a
-    named group (`(?P<id>…)`), and both — so the comparison is over the
-    BODY, which is the part that states the contract.
-    """
-    assignment = re.compile(
-        ID_ASSIGNMENT_TEMPLATE.format(name=re.escape(constant)), re.MULTILINE
-    )
-    found = assignment.findall(text_of(scripts_dir / script))
-    assert len(found) == 1, f"{script}: {len(found)} `{constant}` assignments"
-    body = found[0]
-    body = body.removeprefix("^").removesuffix("$")
-    if body.startswith("(?P<id>") and body.endswith(")"):
-        body = body[len("(?P<id>") : -1]
-    return body
-
-
-def duplicate_pointer_body(scripts_dir, script: str) -> str:
-    r"""The script's `=<primary-id>` pointer literal, verbatim.
-
-    Nothing is stripped here, unlike `id_pattern_body`: the `^=\s*` prefix
-    and the capturing group are part of what the two scripts must agree on.
-    """
-    assignment = re.compile(
-        DUPLICATE_ASSIGNMENT_TEMPLATE.format(
-            name=re.escape(DUPLICATE_POINTER_CONSTANT)
-        ),
-        re.MULTILINE,
-    )
-    found = assignment.findall(text_of(scripts_dir / script))
-    assert len(found) == 1, \
-        f"{script}: {len(found)} `{DUPLICATE_POINTER_CONSTANT}` assignments"
-    return found[0]
-
-
-def test_the_finding_id_pattern_is_one_contract_across_the_payload(scripts_dir):
-    """The five scripts, the documented exception, then the pointer pair."""
-    bodies = {}
-    for script, constant in ID_PATTERN_CONSTANT.items():
-        if constant is None:
-            assert ID_ALPHABET not in text_of(scripts_dir / script), script
-            continue
-        bodies[script] = id_pattern_body(scripts_dir, script, constant)
-    # Every script that carries the pattern carries the SAME pattern, and
-    # the reference copy is the recount's — it is the closure gate.
-    assert set(bodies) == {"recount.py", "transcribe.py", "rollup.py", "trace.py"}
-    assert set(bodies.values()) == {bodies["recount.py"]}, bodies
-    # And the contract is the composite one, not a single-segment prefix.
-    assert bodies["recount.py"] == (
-        r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)*-\d+"
-    )
-    # The one exception, asserted as an exception: narrower, and saying so.
-    exception = id_pattern_body(scripts_dir, "validate-report.py", "ID_RE")
-    assert exception == NARROWER_ID_BODY
-    assert exception != bodies["recount.py"]
-    reason = text_of(scripts_dir / "validate-report.py")
-    assert NARROWER_IS_DELIBERATE in reason
-    assert NARROWER_NAMES_THE_COMPOSITE in reason
-    # The same contract in its second literal — the `=<primary-id>` pointer.
-    pointers = {
-        script: duplicate_pointer_body(scripts_dir, script)
-        for script in DUPLICATE_POINTER_SCRIPTS
-    }
-    assert pointers["recount.py"] == pointers["rollup.py"], pointers
-    # And it is the id contract above, wrapped in the pointer's own syntax:
-    # a pointer wider or narrower than the ids it may name is the divergence.
-    assert pointers["recount.py"] == r"^=\s*(" + bodies["recount.py"] + ")"
-
-
-# --- what the composite id does NOT buy: a lens ----------------------------
-#
-# The id contract above makes `V-CIT-1` readable by both instruments. What it
-# does not do is attribute the row to a lens: the prefix names a verifier
-# pass and the stem of what it re-checked. Both scripts already behave that
-# way, so nothing here is a behavior claim — it is the claim that the
-# behavior is WRITTEN DOWN, in both docstrings, together with the residual
-# gap it leaves (the mechanical security backstop is keyed on the lens prefix
-# and so never reaches such a row). A rule derivable only by reading the
-# source is a rule the next reader re-derives or gets wrong.
-
-COMPOSITE_LENS_SCRIPTS = ("recount.py", "rollup.py")
-COMPOSITE_NOT_A_LENS = "a row with a composite id is never attributed to a lens"
-# The residual gap, named in the same breath rather than left to be found.
-COMPOSITE_BACKSTOP_GAP = "keyed on the declared lens prefix"
-COMPOSITE_GAP_CONSEQUENCE = "does not reach a composite-id row either"
-
-
-def module_docstring(path):
-    """The file's MODULE docstring, wrapping collapsed and case folded.
-
-    The claim is about the docstring — the text a reader of `--help` and of
-    the file's own head is given — so the assertion reads that node and not
-    the whole file: a sentence buried in a comment would satisfy a plain
-    grep and leave the documented contract exactly where it was.
-    """
-    doc = ast.get_docstring(ast.parse(text_of(path))) or ""
-    return re.sub(r"\s+", " ", doc).lower()
-
-
-@pytest.mark.parametrize("script", COMPOSITE_LENS_SCRIPTS)
-def test_the_composite_id_is_stated_to_carry_no_lens(scripts_dir, script):
-    """The sentence, and the honest gap beside it, in both docstrings."""
-    doc = module_docstring(scripts_dir / script)
-    assert COMPOSITE_NOT_A_LENS in doc, script
-    assert COMPOSITE_BACKSTOP_GAP in doc, script
-    assert COMPOSITE_GAP_CONSEQUENCE in doc, script
-    assert "known limitation, not a defect" in doc, script
+    assert FROZEN_REFUSAL in text_of(STAGE_9)
 
 
 # --- the 0.3.0 addendum: four rules the shipped paper must keep ------------
@@ -1057,50 +580,22 @@ SUBAGENT_MODEL_ENV = "CLAUDE_CODE_SUBAGENT_MODEL"
 SUBAGENT_MODEL_CELL = "subagent-model"
 
 
-def test_the_l1_criterion_carries_its_recorded_self_baseline():
-    """A command already failing before the fix is a baseline, not a bar."""
-    scale = flat(READINESS_SCALE)
-    assert L1_BASELINE_LITERAL.lower() in scale
-    # The baseline is taken AT adjudication, so the rule that a criterion
-    # never changes afterwards is untouched by it.
-    assert "the baseline is recorded at adjudication" in scale
-
-
 def test_the_l1_baseline_rule_sits_inside_the_rules_of_use():
     """The rule is a rule OF USE of the ladder, not a note under the table."""
     scale = text_of(READINESS_SCALE)
     assert scale.index(L1_BASELINE_LITERAL) > scale.index(RULES_OF_USE_HEADING)
 
 
-def test_the_baseline_rule_carries_its_security_carve_out():
-    """Without the carve-out an already-failing security command becomes
-    the bar it must merely not regress from — the finding disappears."""
-    scale = flat(READINESS_SCALE)
-    assert "class:security-pii" in scale
-    assert "a security command that already fails is a finding of the round"\
-        " in its own right" in scale
-
-
 def test_stage_zero_reads_the_subagent_model_variable():
-    """The env read belongs to stage 0; the router keeps its warning."""
+    """The env read belongs to stage 0, and to stage 0 alone."""
     stage_zero = text_of(STAGE_0)
     assert SUBAGENT_MODEL_ENV in stage_zero
-    assert f"echo ${SUBAGENT_MODEL_ENV}" in stage_zero
-    assert SUBAGENT_MODEL_ENV in text_of(SKILL_MD)
+    quoted_env = f'"${SUBAGENT_MODEL_ENV}"'
+    assert f"printf '%s' {quoted_env}" in stage_zero
     # The recorded cell is named in all three files that carry it: the
     # router's pointer, the stage that writes it, the header it goes into.
     for path in (SKILL_MD, STAGE_0, LEDGER_TEMPLATE):
         assert SUBAGENT_MODEL_CELL in text_of(path), path.name
-
-
-def test_the_subagent_model_record_is_not_a_new_stop_condition():
-    """Both outcomes are recorded and neither refuses the round."""
-    stage_zero = flat(STAGE_0)
-    assert "`subagent-model: unset`" in stage_zero
-    assert "`subagent-model: set <non-model-value>`" in stage_zero
-    assert "this is a record, not a gate: the round continues either way" in (
-        stage_zero
-    )
 
 
 def test_the_residue_register_has_four_nomination_occasions():
@@ -1118,93 +613,10 @@ def test_the_residue_register_has_four_nomination_occasions():
     assert "next round with a note" not in flat_nine
 
 
-def test_the_noticed_paragraph_points_at_the_fourth_occasion():
-    """The route is discoverable from the stage that produces such rows."""
-    assert "the fourth nomination occasion of stage 9" in flat(STAGE_7)
-
-
-def test_a_class_kill_may_close_by_reference_to_an_existing_criterion():
-    """The form of the obligatory reaction changes; the obligation does not."""
-    stage_seven = flat(STAGE_7)
-    assert "the class-kill disposition instead closes by reference to that"\
-        " criterion" in stage_seven
-    assert "no new gate script and no separate row" in stage_seven
-    assert "an orchestrator entry naming the donor row goes into the ledger" in (
-        stage_seven
-    )
-    assert "obligatory, not a right" in stage_seven
-    assert "never the right to skip it" in stage_seven
-
-
 # --- the 0.3.0 addendum, batch D3 ------------------------------------------
 # Six more rules the shipped paper states and no script enforces, so again
 # only their wording can be pinned, and again each is asserted against the
 # file that HOLDS it rather than against a union scan of the payload.
-
-# Spelled in two halves ON PURPOSE: the invariant below is that this token
-# does not occur under the payload, and a test file carrying it whole would
-# be the very hit `grep -rn` must not find.
-SPAWN_PARAM = "run_in_" + "background"
-# The payload's prose and scripts, named by directory: `tests/` is left out
-# because a local virtualenv and a pytest cache live under it, and neither
-# ships.
-PAYLOAD_DIRS = ("skills", "agents", "docs", "examples")
-
-
-def payload_text_files():
-    """Every shipped prose/script file, top-level documents included."""
-    files = [path for path in sorted(REPO_ROOT.glob("*.md")) if path.is_file()]
-    for name in PAYLOAD_DIRS:
-        directory = REPO_ROOT / name
-        if not directory.is_dir():
-            continue
-        files += [path for path in sorted(directory.rglob("*")) if path.is_file()]
-    return files
-
-
-def test_the_round_delta_quotes_the_rollups_own_numbers():
-    """With observability on the cost line is a TRANSFER of computed numbers.
-
-    Nothing is measured for it — the values are read out of the summary the
-    rollup already wrote, which is why no script and no schema moved.
-    """
-    stage_nine = flat(STAGE_9)
-    assert "once the rollup below has written `round-summary.json`, the"\
-        " orchestrator quotes out of it the round's `wallclock_s`, its"\
-        " `totals.tokens`" in stage_nine
-    assert "the count of batches and passes the same file records" in stage_nine
-    assert "with observability off the round delta is written exactly as it"\
-        " is today" in stage_nine
-
-
-def test_the_round_delta_cost_line_states_both_of_its_holes():
-    """A cost line read as complete would be the defect.
-
-    Two things keep it from being read that way: `wallclock_s` is
-    legitimately `null` because the summary is built before the round span
-    closes, and the rollup cannot separate the orchestrator's own spend.
-    """
-    stage_nine = flat(STAGE_9)
-    assert "`wallclock_s: n/a: summary built before s1.00 close`" in stage_nine
-    assert "`orchestrator: n/a (not separable)`" in stage_nine
-    # The wording the rollup itself prints, so the two cannot drift apart.
-    assert "orchestrator: n/a (not separable)" in (
-        (TEMPLATES_DIR / "rollup.py").read_text(encoding="utf-8")
-    )
-
-
-def test_the_signature_may_be_transcribed_only_beside_the_owners_words():
-    """The right to render the phrase and the duty to quote it are ONE rule."""
-    stage_nine = flat(STAGE_9)
-    assert "the orchestrator may render the owner's human phrase into the"\
-        " machine literal" in stage_nine
-    assert "must carry the phrase verbatim beside the `user-signed` literal"\
-        " it was rendered into" in stage_nine
-    # Why the second half is not detachable: the recount sees the literal
-    # only, so the licence alone would legalise a manufactured signature.
-    assert "a licence to transcribe granted without the duty to quote would"\
-        " legalise a signature manufactured out of silence" in stage_nine
-
 
 def test_the_two_signature_statements_stand_as_one_paragraph():
     """Split across a paragraph break, the duty reads as a separate remark."""
@@ -1214,195 +626,19 @@ def test_the_two_signature_statements_stand_as_one_paragraph():
     assert "\n\n" not in stage_nine[start:end]
 
 
-def test_the_payload_promises_no_spawn_parameter_it_cannot_pass():
-    """The foreground promise named an input the orchestrator does not have.
-
-    A requirement resting on a nonexistent parameter is unenforceable, and
-    the sweep is over the payload rather than over stage 7 alone so that the
-    name cannot reappear in a second file.
-    """
-    offenders = [
-        str(path.relative_to(REPO_ROOT))
-        for path in payload_text_files()
-        if SPAWN_PARAM in path.read_text(encoding="utf-8", errors="ignore")
-    ]
-    assert offenders == []
-
-
-def test_the_sequencing_promise_survives_in_the_guardrails_own_terms():
-    """The mechanism was dropped, the obligation was not."""
-    stage_seven = flat(STAGE_7)
-    assert "and every other write-capable agent — strictly sequentially" in (
-        stage_seven
-    )
-    assert "only after its report has arrived and the batch is committed" in (
-        stage_seven
-    )
-    assert "between batches the tree is confirmed quiet with `git status`" in (
-        stage_seven
-    )
-
-
-def test_stage_two_names_the_canonical_scratchpad_layout():
-    """The layout the script's conditions 4 and 7 imply, written down once."""
-    stage_two = flat(STAGE_2)
-    assert "`<scratchpad root>/critic-copies/<object-slug>/<run-id>`" in stage_two
-    assert "that root, and not the copy, is the directory handed to `--root`" in (
-        stage_two
-    )
-    assert "`--run-id` is the last segment" in stage_two
-
-
-def test_the_contract_may_reach_a_lens_as_an_in_copy_pointer():
-    """The bounded equivalent of pasting the body, with both its conditions."""
-    stage_two = flat(STAGE_2)
-    assert "where the contract file physically lies inside the copy the"\
-        " critics read, the orchestrator may substitute into"\
-        " `{round_contract}` a pointer to that path inside the copy" in stage_two
-    assert "(a) the path is identical for every lens" in stage_two
-    assert "(b) the ledger header carries the contract's sha" in stage_two
-
-
-def test_the_in_copy_pointer_does_not_touch_the_identity_requirement():
-    """The equivalence is about FORM; the scope every lens reads is one."""
-    stage_two = flat(STAGE_2)
-    assert "identically and verbatim" in stage_two
-    assert "re-telling, shortening or angling for one lens stay forbidden" in (
-        stage_two
-    )
-
-
-def test_the_deleted_line_walk_is_divided_explicitly_on_a_lens_split_pass():
-    """Ids split by scope, deleted lines split by FILE — and both in writing."""
-    stage_eight = flat(STAGE_8)
-    assert "the deterministic deleted-line walk is divided by that same rule"\
-        " and divided explicitly" in stage_eight
-    assert "names the one verifier of the pass that walks them all" in stage_eight
-    assert "the union covers every deleted-line of the batch with no hole" in (
-        stage_eight
-    )
-
-
-def test_the_residue_scoped_condition_a_covers_the_deleted_line_walk():
-    """Condition (a) reads full-scope off stage 8, so it inherits the rule."""
-    assert "condition (a) takes stage 8's sense of full-scope whole" in (
-        flat(STAGE_9)
-    )
-    assert "a pass whose walk left a hole is not full-scope here either" in (
-        flat(STAGE_9)
-    )
-
-
 # --- the 0.3.0 addendum, batch D4 ------------------------------------------
 # The front door stopped quoting efficacy figures. That is three properties
 # at once, and none of them is behavior of any script: the figures are gone
 # from the two files that quoted them, they are still there, verbatim, in the
 # one file that keeps them as provenance, and the README says plainly that no
-# benchmark exists. The tuple below has the same shape as STANDALONE_LITERALS
-# above — one (file, literal) row per sentence, parametrized into one test.
+# benchmark exists. The sentences that say so are records of `prose_pins.py`.
 
 README_MD = REPO_ROOT / "README.md"
-WHY_CRITICS = REPO_ROOT / "docs" / "why-critics.md"
-
-# The withdrawn figures, as the pattern the requirement is written with. The
-# decimal comma is in it because `16,6` is the same claim as `16.6`.
-# The alternatives are anchored against ADJACENT DIGITS, because unanchored
-# they match digit runs that merely contain a figure: `525` fires inside
-# `1525`, `8.5` inside `18.5`, `47%` inside `147%`. Unanchored, the absence
-# assertion below would be about substrings rather than about the withdrawn
-# claims, and an unrelated future number sharing a digit run would fail it.
-# The guards forbid a digit — or a digit and a decimal separator — before the
-# figure, and a digit, or a decimal separator followed by a digit, after it.
-# A trailing `.` that ends a sentence is not part of a number, so `525.` at
-# the end of a sentence still matches, which is how the figure is written in
-# the file that KEEPS it.
-WITHDRAWN_FIGURES = re.compile(
-    r"(?<!\d)(?<!\d[.,])"
-    r"(?:47%|16[.,]6|525|2[.,]7|8[.,]5|~100%|70%|1→0)"
-    r"(?!\d)(?![.,]\d)"
-)
-# Every one of them, as it stands in the file that KEEPS them.
-FIGURES_KEPT = {"47%", "16.6", "525", "2.7", "8.5", "~100%", "70%", "1→0"}
-# The two files the withdrawal cleared.
-FIGURE_FREE = (README_MD, SKILL_MD)
-
-WITHDRAWAL_LITERALS = (
-    (README_MD, "**There is no external benchmark for any of this, and none"
-                " is claimed.**"),
-    (README_MD, "Collecting that evidence is planned, not done"),
-    (WHY_CRITICS, "**These numbers are provenance, not efficacy evidence.**"),
-)
-
-# A published asset would have been the other way of showing a round; the
-# text block in the README is the decision, and these extensions are what it
-# ruled out.
-BINARY_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".cast")
-
-
-def shipped_payload_files():
-    """Every shipped file, walked by directory rather than by `git`.
-
-    The suite must pass over a COPY of the payload (`CRITIC_LEDGER_SCRIPTS_DIR`),
-    where no index exists, so the walk is over `PAYLOAD_DIRS` — the same
-    directories `payload_text_files()` uses, for the same reason it leaves
-    `tests/` out — plus every top-level file, which that helper narrows to
-    `*.md` and this one does not. A local run leaves caches inside the payload
-    (`__pycache__`, `.mypy_cache`, `.ruff_cache`); none of them ships, so a
-    path with a dot-directory in it is not a shipped file.
-    """
-
-    def ships(path):
-        parts = path.relative_to(REPO_ROOT).parts[:-1]
-        return path.is_file() and not any(
-            part.startswith(".") or part == "__pycache__" for part in parts
-        )
-
-    files = [path for path in sorted(REPO_ROOT.glob("*")) if path.is_file()]
-    for name in PAYLOAD_DIRS:
-        directory = REPO_ROOT / name
-        if not directory.is_dir():
-            continue
-        files += [path for path in sorted(directory.rglob("*")) if ships(path)]
-    return files
-
-
-@pytest.mark.parametrize("path", FIGURE_FREE)
-def test_no_efficacy_figure_is_left_in_the_front_door_files(path):
-    """The withdrawal, as the absence it is defined by."""
-    hits = WITHDRAWN_FIGURES.findall(text_of(path))
-    assert hits == [], f"{path.name}: {hits}"
-
-
-def test_every_withdrawn_figure_survives_where_it_is_provenance():
-    """Withdrawal is a re-framing, not a deletion.
-
-    A test that only checked the absence would be satisfied by deleting the
-    observations outright, which is the opposite of what was decided.
-    """
-    assert set(WITHDRAWN_FIGURES.findall(text_of(WHY_CRITICS))) == FIGURES_KEPT
-
-
-@pytest.mark.parametrize(("path", "literal"), WITHDRAWAL_LITERALS)
-def test_the_withdrawal_sentences_are_present(path, literal):
-    assert literal.lower() in flat(path), f"{literal[:40]}… missing"
 
 
 def test_the_readme_carries_exactly_one_flow_diagram():
     """One diagram, and one only — the modes are not duplicated."""
     assert text_of(README_MD).count("```mermaid") == 1
-
-
-def test_no_binary_asset_ships_with_the_payload():
-    """The round is shown as text; nothing renders it as an image or a cast."""
-    files = shipped_payload_files()
-    # Fail-closed: an empty walk must never be reported as a clean one.
-    assert len(files) > 30, len(files)
-    offenders = [
-        str(path.relative_to(REPO_ROOT))
-        for path in files
-        if path.suffix.lower() in BINARY_SUFFIXES
-    ]
-    assert offenders == []
 
 
 # --- companion text that must move with the thing it describes -------------
@@ -1559,7 +795,8 @@ def tag_literals_defined_by_the_recount():
     handling.
     """
     stems = set()
-    for node in ast.parse(text_of(RECOUNT_SCRIPT)).body:
+    body = [node for path in RECOUNT_SOURCES for node in ast.parse(text_of(path)).body]
+    for node in body:
         if isinstance(node, ast.Assign):
             value = node.value
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
@@ -1589,147 +826,6 @@ def test_no_tag_the_recount_defines_is_missing_from_that_comment():
     assert sorted(tag for tag in defined if tag not in documented) == []
 
 
-# --- the telemetry spec, batch T8 (R-T6) -----------------------------------
-#
-# Two more companion-text surfaces, both derivable and therefore gated here
-# rather than trusted to the convention of re-deriving prose.
-#
-# (c) The published "in full" enumeration of `rounds.jsonl` against the keys
-#     `project()` actually returns. The README says the list is exhaustive and
-#     that the line carries no object name, no absolute clock and no commit
-#     hash; `project()` builds its line from an EXPLICIT key allowlist, so a
-#     key added there and not added to the README makes a published guarantee
-#     false, and a key named in the README that the projection never emits is
-#     a promise about a field nobody receives.
-# (d) The placement of the leaving-the-machine rule in `observability.md`. The
-#     rule is written BELOW the frozen privacy-invariant block on purpose:
-#     inserting above it would shift the byte range the freeze is proved by.
-#     Order is the requirement, so order is what is asserted.
-
-ROLLUP_SCRIPT = TEMPLATES_DIR / "rollup.py"
-OBSERVABILITY_MD = REFERENCES_DIR / "observability.md"
-
-# The paragraph that carries the enumeration, by its opening literal. The
-# passage is one paragraph and ends at the first blank line after it.
-ROUNDS_IN_FULL_OPEN = "**The cross-project rollup's fields, in full**"
-# Backticked tokens in that paragraph that are NOT projected keys, each for a
-# stated reason. `plan`/`impl` are the two VALUES `mode` may take, glossed in
-# the same sentence; the other three are the keys INSIDE `object`, named so
-# that "and not one file name among them" can be checked by a reader. A token
-# that is neither a projected key nor on this list is an undeclared claim.
-ROUNDS_README_GLOSSES = frozenset(
-    {"plan", "impl", "lines_at_pin", "changed_lines", "files_touched"}
-)
-# A backticked token in that paragraph, with a trailing `[]` stripped: the
-# README writes the list-valued keys as `lenses[]`, the dict writes `lenses`.
-README_KEY_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)(?:\[\])?`")
-
-
-def rounds_in_full_paragraph() -> str:
-    """The README paragraph enumerating the `rounds.jsonl` fields."""
-    text = text_of(README_MD)
-    start = text.index(ROUNDS_IN_FULL_OPEN)
-    end = text.index("\n\n", start)
-    return text[start:end]
-
-
-def projected_keys() -> set[str]:
-    """The literal top-level keys of the dict `project()` returns.
-
-    Read off the source with `ast`, never imported: `rollup.py` is a CLI and
-    importing it would run its argument handling — the same reason
-    `tag_literals_defined_by_the_recount()` above parses instead of imports.
-    A key computed rather than written as a literal would not be a published
-    enumeration in the first place, so a non-constant key fails this read.
-    """
-    tree = ast.parse(text_of(ROLLUP_SCRIPT))
-    functions = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "project"
-    ]
-    assert len(functions) == 1, [node.lineno for node in functions]
-    dicts = [
-        node.value
-        for node in ast.walk(functions[0])
-        if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)
-    ]
-    assert len(dicts) == 1, len(dicts)
-    keys = set()
-    for key in dicts[0].keys:
-        assert isinstance(key, ast.Constant) and isinstance(key.value, str), key
-        keys.add(key.value)
-    # Fail-closed: an extraction that found nothing would agree with anything.
-    assert len(keys) > 5, sorted(keys)
-    return keys
-
-
-def test_the_readme_enumeration_and_the_projection_agree_key_for_key():
-    """The published list is exhaustive, so it is derived from the code.
-
-    Both directions are asserted, because each is a different false claim.
-    A key the projection emits and the paragraph omits makes the published
-    "in full" untrue by composition. A name the paragraph carries and the
-    projection never emits promises a field nobody receives — as false, and
-    invisible to a one-sided check.
-
-    The forward direction is INCLUSION rather than equality: the paragraph
-    also glosses `mode`'s two values and `object`'s three inner counts, none
-    of which is a top-level key of the line. Those five are declared in
-    `ROUNDS_README_GLOSSES`, so the reverse direction stays exact — a stray
-    key name added to the paragraph is not explained by any of them and
-    fails here.
-    """
-    named = set(README_KEY_RE.findall(rounds_in_full_paragraph()))
-    projected = projected_keys()
-    missing = sorted(projected - named)
-    assert missing == [], missing
-    unexplained = sorted(named - projected - ROUNDS_README_GLOSSES)
-    assert unexplained == [], unexplained
-
-
-# The three blocks of `observability.md`, in the order the spec pins them.
-# Matched against `flat()` — these are wrapped sentences, and a reflow must
-# not read as a deleted rule.
-PRIVACY_INVARIANT_ANCHOR = (
-    "**the privacy invariant.** everything observability produces is a local"
-    " file the person who ran the round owns."
-)
-LEAVING_THE_MACHINE_ANCHOR = (
-    "**whatever leaves the machine leaves only through the cleansing"
-    " projection.**"
-)
-MISSING_NUMBER_ANCHOR = (
-    "**a missing number is `n/a: <reason>` — never a failure, and never a"
-    " blocked round.**"
-)
-
-
-def test_the_leaving_the_machine_rule_sits_below_the_frozen_invariant():
-    """Placement is the requirement, so placement is what is asserted.
-
-    The privacy invariant is a byte-frozen block that three requirements
-    cite by line range. The rule about what may leave the machine belongs
-    beside it but BELOW it: inserted above, it would shift the very range
-    the freeze is proved by. The three anchors are located by index in one
-    reading of the file, so the order is checked rather than the presence.
-    """
-    text = flat(OBSERVABILITY_MD)
-    positions = {}
-    for name, anchor in (
-        ("privacy invariant", PRIVACY_INVARIANT_ANCHOR),
-        ("leaving the machine", LEAVING_THE_MACHINE_ANCHOR),
-        ("missing number", MISSING_NUMBER_ANCHOR),
-    ):
-        assert anchor in text, name
-        positions[name] = text.index(anchor)
-    assert (
-        positions["privacy invariant"]
-        < positions["leaving the machine"]
-        < positions["missing number"]
-    ), positions
-
-
 # --- the payload carries no out-of-tree data, and reaches no out-of-tree data
 #
 # The mechanical half of a rule the release flow states in prose: a test
@@ -1756,7 +852,7 @@ PAYLOAD_EXAMPLE_ROUND_IDS = frozenset(
     {
         # `references/stage-1-run-folder.md` — the run folder's own example.
         "2026-01-15-101502-auth-plan",
-        # `templates/cleanup-scratchpad.py` usage, and the copy-script tests
+        # `scripts/cleanup-scratchpad.py` usage, and the copy-script tests
         # built on it; the second form is that same id with the per-lens
         # suffix the copy script refuses in `--run-id`.
         "2026-02-03-084011-api-spec",
@@ -1765,29 +861,10 @@ PAYLOAD_EXAMPLE_ROUND_IDS = frozenset(
         # of the worked example's residue rows.
         "2026-08-03-091734-bench-report",
         "2026-08-08-143000-copy-script",
-        # The trace/rollup schema's four canonical example records, and the
-        # `--round` value the regression suite and the recount tests pass.
-        "2026-08-11-101502-auth-plan",
+        # The `--round` value the regression suite, the trace/rollup
+        # schema's example records and the recount tests all pass.
         "2026-09-01-120000-object",
     }
-)
-
-# Directories nothing is authored in and nothing ships from.
-NON_SOURCE_DIRS = frozenset(
-    {".git", ".venv", "__pycache__", ".pytest_cache", ".ruff_cache",
-     ".mypy_cache", "node_modules"}
-)
-
-# Reaching out of the payload root, in the two forms a test can write it.
-# Both are patterns rather than plain substrings, which is what lets the
-# sweep cover this file too: the source below carries each token with a
-# backslash in it and therefore does not match itself. The word boundary in
-# the first also keeps `workflow_files()`'s bounded, git-stopped climb out
-# of the sweep — that walk is over the ENCLOSING repository's workflows,
-# declared and capped, and is not what this gate is about.
-REACH_ABOVE_ROOT = (
-    re.compile(r"\bREPO_ROOT\.parent\b"),
-    re.compile(r"\bparents\[3\]"),
 )
 
 
@@ -1829,20 +906,490 @@ def test_no_shipped_file_carries_an_unknown_round_identifier():
     assert offenders == [], offenders
 
 
-def test_no_test_in_the_payload_reaches_above_the_payload_root():
-    """The published suite tests the published tree and nothing above it."""
-    sources = sorted((REPO_ROOT / "tests").rglob("*.py"))
-    # Fail-closed: no sources found means the sweep proved nothing.
-    assert len(sources) > 5, [str(path) for path in sources]
-    offenders = []
-    for path in sources:
-        if any(part in NON_SOURCE_DIRS for part in path.parts):
+def test_every_example_round_identifier_is_still_shown_somewhere():
+    """An exemption no file uses is a stale exemption.
+
+    The list above is read by a reviewer as the inventory of what the
+    payload shows; an entry whose carrier has gone silently widens what
+    the sweep will accept the next time a literal is pasted in.
+    """
+    files = payload_source_files()
+    assert len(files) > 50, len(files)
+    shown = set()
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for match in ROUND_ID_RE.findall(text):
+            shown.add(match.rstrip("-"))
+    assert sorted(PAYLOAD_EXAMPLE_ROUND_IDS - shown) == []
+
+
+def test_the_scripts_directory_ships_nine_python_clis():
+    """The count the suite's own docstring and CONTRIBUTING.md quote.
+
+    Both name it in prose, and prose does not recount itself: a script
+    added to or removed from the directory fails here rather than
+    leaving two documents quoting a number the tree no longer has.
+    """
+    scripts_dir = REPO_ROOT / "skills" / "critic-ledger" / "scripts"
+    clis = sorted(
+        path.name
+        for path in scripts_dir.glob("*.py")
+        if "__main__" in path.read_text(encoding="utf-8")
+    )
+    assert len(clis) == 9, clis
+    assert "the nine standalone" in text_of(REPO_ROOT / "tests" / "unit"
+                                           / "conftest.py")
+    assert "the nine Python ones" in text_of(REPO_ROOT / "CONTRIBUTING.md")
+
+
+# --- the `###` section grid of stages 2 and 6-9 -----------------------------
+#
+# Each of the five stage bodies below carries an addressable grid of `###`
+# headings. A heading is an ADDRESS: once it has landed, its number is
+# frozen, so a later edit may not renumber it, reorder it or close the gap
+# left by one that goes away — renaming it is allowed. A new section takes
+# the NEXT FREE number at the end of its stage's run, never a renumbering of
+# the ones already there — renumbering would silently redirect every
+# reference made to the old address. The tuples below pin the numbers that
+# may never disappear, and by their length their count; the test also
+# checks that the file's numbers stand in increasing order without repeats.
+# A heading renumbered, reordered or dropped in the payload fails here
+# rather than drifting away from whatever cites it. A new section that
+# re-uses an old gap is not caught here: the rule above is what forbids it.
+
+STAGE_2_SECTION_NUMBERS = (
+    "2.1",
+    "2.2",
+    "2.3",
+    "2.4",
+)
+
+STAGE_6_SECTION_NUMBERS = (
+    "6.1",
+    "6.2",
+    "6.3",
+    "6.4",
+    "6.5",
+    "6.6",
+    "6.7",
+    "6.8",
+    "6.9",
+    "6.10",
+    "6.11",
+    "6.12",
+    "6.13",
+    "6.14",
+    "6.15",
+    "6.16",
+    "6.17",
+    "6.18",
+    "6.19",
+    "6.20",
+    "6.21",
+    "6.22",
+    "6.23",
+    "6.24",
+    "6.25",
+    "6.26",
+    "6.27",
+    "6.28",
+    "6.30",
+)
+
+STAGE_7_SECTION_NUMBERS = (
+    "7.1",
+    "7.2",
+    "7.3",
+    "7.4",
+    "7.5",
+    "7.6",
+    "7.7",
+    "7.8",
+    "7.9",
+    "7.10",
+    "7.11",
+    "7.12",
+    "7.13",
+    "7.14",
+    "7.15",
+    "7.16",
+    "7.17",
+    "7.18",
+    "7.19",
+    "7.20",
+    "7.21",
+    "7.22",
+    "7.23",
+    "7.24",
+)
+
+STAGE_8_SECTION_NUMBERS = (
+    "8.1",
+    "8.2",
+    "8.3",
+    "8.4",
+    "8.5",
+    "8.6",
+    "8.7",
+    "8.8",
+)
+
+STAGE_9_SECTION_NUMBERS = (
+    "9.1",
+    "9.2",
+    "9.3",
+    "9.4",
+    "9.5",
+    "9.6",
+    "9.7",
+    "9.8",
+    "9.9",
+    "9.10",
+    "9.11",
+    "9.12",
+    "9.13",
+    "9.14",
+    "9.15",
+    "9.16",
+    "9.17",
+    "9.18",
+    "9.19",
+    "9.20",
+    "9.21",
+    "9.22",
+    "9.23",
+    "9.24",
+    "9.25",
+    "9.26",
+    "9.27",
+    "9.29",
+)
+
+
+def section_headings(path) -> tuple[str, ...]:
+    """Every `### ` line of a stage file, in file order."""
+    return tuple(
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.startswith("### ")
+    )
+
+
+def section_numbers(path, stage: int) -> tuple[str, ...]:
+    """The `<stage>.<k>` addresses of a stage file, in file order."""
+    return tuple(
+        match.group(1)
+        for line in section_headings(path)
+        if (match := re.match(rf"### ({stage}\.\d+)(?=\s|$)", line))
+    )
+
+
+@pytest.mark.parametrize(
+    ("stage", "path", "frozen", "size"),
+    [
+        (2, STAGE_2, STAGE_2_SECTION_NUMBERS, 4),
+        (6, STAGE_6, STAGE_6_SECTION_NUMBERS, 29),
+        (7, STAGE_7, STAGE_7_SECTION_NUMBERS, 24),
+        (8, STAGE_8, STAGE_8_SECTION_NUMBERS, 8),
+        (9, STAGE_9, STAGE_9_SECTION_NUMBERS, 28),
+    ],
+    ids=["2", "6", "7", "8", "9"],
+)
+def test_stage_section_grid_is_stable(stage, path, frozen, size):
+    """Each stage's `###` addresses are ordered, unique and never lose one."""
+    assert len(frozen) == size
+    found = section_numbers(path, stage)
+    assert list(found) == sorted(found, key=lambda s: int(s.split(".")[1]))
+    assert len(found) == len(set(found))
+    assert set(found) >= set(frozen)
+
+
+# --- two more companion-text surfaces, all derivable -----------------------
+#
+# (e) The command stage 1 names for instantiating a ledger, against the
+#     subcommand the module actually exposes. Stage 1 stopped telling the
+#     orchestrator to COPY the template; if the module's `new` command were
+#     renamed, the stage text would send it to a command that does not
+#     exist, and nothing else would notice.
+# (f) The ledger is not the fixer's to edit. The rule is stated twice — in
+#     the agent definition and in the spawn prompt built from the template —
+#     because a spawn carries the prompt and not the file, so a rule missing
+#     from either is a rule the fixer of that round never saw.
+
+LEDGER_MD_MODULE = SCRIPTS_DIR / "ledger_md.py"
+# The module's first subcommand, `new`, read off its source constant rather than
+# hand-copied: this gate compares the stage text against what the module
+# exposes, so the module is the side that must be derived.
+SUBCOMMAND_ASSIGNMENT_RE = re.compile(r'^NEW = "([a-z-]+)"$', re.MULTILINE)
+# The forbidding sentence, in the exact wording both fixer texts carry.
+FIXER_LEDGER_BAN = "never edit `fix-ledger.md` — not a cell"
+
+
+def test_stage_1_names_the_subcommand_the_module_exposes():
+    """The stage instantiates the ledger by the command that exists."""
+    match = SUBCOMMAND_ASSIGNMENT_RE.search(text_of(LEDGER_MD_MODULE))
+    # Fail-closed: no constant read means nothing was compared.
+    assert match is not None, "no NEW constant in ledger_md.py"
+    stage = text_of(STAGE_1)
+    assert f"ledger_md.py {match.group(1)} " in stage
+    assert "--template" in stage
+    assert "--out" in stage
+
+
+def test_the_fixer_is_told_in_both_texts_not_to_edit_the_ledger():
+    """The agent file and the spawn prompt carry the same forbidding line."""
+    for path in (FIXER_AGENT, FIXER_PROMPT):
+        assert FIXER_LEDGER_BAN in flat(path).lower(), str(path)
+
+
+# --- the prose registry: sentences whose whole existence is their wording ---
+#
+# A rule the skill states in prose and nothing executes is held by a literal
+# match and nothing else. Those matches are data in `prose_pins.py`: a record
+# names the shipped file, the literal, the reason the sentence matters, and
+# where the rule needs it the exact count or the `### ` section that owns the
+# literal. The one test below reads every record; a pin none of the record's
+# forms can state stays a function above, with a comment saying why.
+
+
+@pytest.mark.parametrize(
+    "pin", PROSE_PINS, ids=[f"{pin.file}::{pin.literal[:40]}" for pin in PROSE_PINS]
+)
+def test_every_prose_pin_holds(pin):
+    """The record's literal stands in its file, its section and its count.
+
+    A section runs from its `### <number>` heading to the next `### `
+    heading and is matched with its line wrapping collapsed; a `flat` record
+    is matched as `flat()` matches, wrapping collapsed and case folded. The
+    heading is found by the same address rule `section_numbers` reads —
+    the number followed by whitespace or the end of the line — so a bare
+    heading the grid test accepts is a heading this test finds too.
+    """
+    text = text_of(REPO_ROOT / pin.file)
+    if pin.section is not None:
+        lines = text.splitlines()
+        heading = re.compile(rf"### {re.escape(pin.section)}(?=\s|$)")
+        start = next(
+            (i for i, line in enumerate(lines) if heading.match(line)), None
+        )
+        assert start is not None, f"{pin.file}: no section {pin.section}"
+        body = []
+        for line in lines[start + 1 :]:
+            if line.startswith("### "):
+                break
+            body.append(line)
+        text = " ".join(" ".join(body).split())
+    literal = pin.literal
+    if pin.flat:
+        text = re.sub(r"\s+", " ", text).lower()
+        literal = literal.lower()
+    if pin.count is None:
+        assert literal in text, f"{pin.literal[:40]}… missing"
+    else:
+        assert text.count(literal) == pin.count, f"{pin.literal[:40]}… count"
+
+
+# --- the worked example's dates run forwards -------------------------------
+#
+# The defect this closes was a fictional date in the worked example that sat
+# LATER than dates the schema puts after it. It was fixed pointwise; the
+# class was not. What the schema orders is checked here and nothing else: a
+# ledger's `Round-started` comes before every verification pass, the passes
+# run in the order they are numbered, and the round is closed last. Dates
+# the schema does NOT order — a residue ratified in an earlier round, a
+# register's review date years out — are deliberately outside the check:
+# they are legitimately older or newer than the round they appear in.
+
+WORKED_ROUND_DIR = REPO_ROOT / "examples" / "worked-round"
+ROUND_STARTED_RE = re.compile(r"^- Round-started:\s*(\S+?)\.?\s*$", re.MULTILINE)
+LEDGER_CLOSED_RE = re.compile(
+    r"^- Ledger state:\s*closed\s+(\d{4}-\d{2}-\d{2})", re.MULTILINE,
+)
+# A timestamp as the schema writes it: an ISO date, optionally with a time.
+TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}:\d{2})Z?)?$")
+PASSES_HEADER_START = "| # | pass (scope) |"
+
+
+def as_instant(value: str, *, end_of_day: bool) -> str | None:
+    """Return a comparable `date time` string, or None if this is not one.
+
+    A date with no time is compared at the START of its day when it opens a
+    range and at the END when it closes one, so that a round started at
+    `09:00` on the day it closed is chronological rather than an offence.
+    """
+    match = TIMESTAMP_RE.match(value.strip().strip("`"))
+    if match is None:
+        return None
+    day, clock = match.group(1), match.group(2)
+    if clock is None:
+        clock = "23:59:59" if end_of_day else "00:00:00"
+    return f"{day} {clock}"
+
+
+def passes_table_timestamps(text: str) -> list[tuple[str, str]]:
+    """Every `started`/`ended` cell of the verification-passes table, in order.
+
+    The two columns are OPTIONAL (a round with observability off omits them
+    entirely), so an absent column is silence and not a failure. They are
+    found BY NAME, the way the recount finds every column it reads.
+    """
+    lines = text.splitlines()
+    found: list[tuple[str, str]] = []
+    for index, line in enumerate(lines):
+        if not line.strip().startswith(PASSES_HEADER_START):
             continue
+        header = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if "started" not in header or "ended" not in header:
+            return []
+        first, last = header.index("started"), header.index("ended")
+        for row in lines[index + 2 :]:
+            stripped = row.strip()
+            if not stripped.startswith("|"):
+                break
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if len(cells) != len(header) or set(stripped) <= set("|- :"):
+                continue
+            found.append((cells[first], cells[last]))
+        return found
+    return found
+
+
+def chronology_offences(name: str, text: str) -> list[str]:
+    """Every place the file's dates run backwards where the schema orders them."""
+    offences: list[str] = []
+    started = ROUND_STARTED_RE.search(text)
+    closed = LEDGER_CLOSED_RE.search(text)
+    opened_at = (
+        as_instant(started.group(1), end_of_day=False) if started else None
+    )
+    closed_at = as_instant(closed.group(1), end_of_day=True) if closed else None
+    if opened_at and closed_at and opened_at > closed_at:
+        offences.append(
+            f"{name}: Round-started {started.group(1)} is later than "
+            f"the closure {closed.group(1)}",
+        )
+    previous = opened_at
+    previous_label = "Round-started"
+    for number, (raw_start, raw_end) in enumerate(
+        passes_table_timestamps(text), 1,
+    ):
+        for label, raw, end_of_day in (
+            (f"pass {number} started", raw_start, False),
+            (f"pass {number} ended", raw_end, True),
+        ):
+            instant = as_instant(raw, end_of_day=end_of_day)
+            if instant is None:
+                continue
+            if previous is not None and instant < previous:
+                offences.append(
+                    f"{name}: {label} {raw} is earlier than "
+                    f"{previous_label}",
+                )
+            if closed_at is not None and instant > closed_at:
+                offences.append(
+                    f"{name}: {label} {raw} is later than the closure",
+                )
+            previous, previous_label = instant, label
+    return offences
+
+
+def test_the_worked_examples_dates_run_forwards():
+    """Every ordered date of the shipped example is non-decreasing."""
+    files = sorted(WORKED_ROUND_DIR.glob("*.md"))
+    # Fail-closed: no example read means nothing was checked.
+    assert len(files) >= 3, [str(path) for path in files]
+    anchored = 0
+    offences: list[str] = []
+    for path in files:
         text = text_of(path)
-        for number, line in enumerate(text.splitlines(), 1):
-            for pattern in REACH_ABOVE_ROOT:
-                if pattern.search(line):
-                    offenders.append(
-                        f"{path.relative_to(REPO_ROOT)}:{number}: {line.strip()}"
-                    )
-    assert offenders == [], offenders
+        if ROUND_STARTED_RE.search(text):
+            anchored += 1
+        offences += chronology_offences(path.name, text)
+    # And the checker must have had at least one file with anchors to read.
+    assert anchored >= 1, [str(path) for path in files]
+    assert offences == [], offences
+
+
+# The same example text with ONE date moved backwards, and a passes table
+# whose rows run backwards: the checker above must reject both, or its
+# silence on the real files says nothing.
+BACKWARDS_PASSES = (
+    "- Round-started: 2026-08-09T09:00:00Z.\n"
+    "- Ledger state: closed 2026-08-09.\n"
+    "\n"
+    "| # | pass (scope) | verdicts (L/P/NOT) | started | ended |\n"
+    "|---|---|---|---|---|\n"
+    "| 1 | first | 1/0/0 | 2026-08-09T10:00:00Z | 2026-08-09T11:00:00Z |\n"
+    "| 2 | second | 1/0/0 | 2026-08-09T09:30:00Z | 2026-08-09T12:00:00Z |\n"
+)
+
+
+def test_the_chronology_checker_rejects_a_swapped_date():
+    """The negative fixture: the same checker, a date put out of order."""
+    text = text_of(WORKED_ROUND_DIR / "fix-ledger.md")
+    swapped = text.replace(
+        "- Round-started: 2026-08-09T09:00:00Z.",
+        "- Round-started: 2026-08-19T09:00:00Z.",
+    )
+    assert swapped != text, "the fixture no longer matches the example"
+    assert chronology_offences("swapped", swapped) != []
+
+
+def test_the_chronology_checker_rejects_a_backwards_passes_table():
+    """A pass that starts before the previous one ended is an offence too."""
+    offences = chronology_offences("backwards", BACKWARDS_PASSES)
+    assert offences != []
+    assert "pass 2 started" in offences[0]
+
+
+def passes_header_cells() -> list[str]:
+    """The header cells of the template's verification-passes table."""
+    for line in text_of(LEDGER_TEMPLATE).splitlines():
+        if line.strip().startswith(PASSES_HEADER_START):
+            return [cell.strip() for cell in line.strip().strip("|").split("|")]
+    raise AssertionError("the verification-passes table header is gone")
+
+
+def test_the_passes_table_carries_the_verifier_count_column():
+    """The `verifiers` column exists, `new findings` keeps its position."""
+    cells = passes_header_cells()
+    assert "verifiers" in cells, cells
+    assert cells.index("new findings") == 3, cells
+    assert (
+        "`verifiers` = how many verifiers the pass had"
+        in text_of(LEDGER_TEMPLATE)
+    )
+
+
+# --- the shell harness's table headers stay in sync with the fixture builders
+
+# The harness that drives the shell fixtures is frozen by a signed non-goal
+# of this package; its table headers are copied by hand into the fixture
+# builders of conftest.py rather than shared through one function. This
+# test is the only thing standing between the two copies drifting silently.
+
+REGRESSION_HARNESS = REPO_ROOT / "tests" / "run-regression.sh"
+HEADER_CAPTURE_RE = re.compile(r"^H(8|9)?='([^']*)'", re.MULTILINE)
+
+
+def test_the_regression_headers_match_the_conftest_headers():
+    """Each shell-side table header equals the fixture-builder constant it names.
+
+    The frozen harness enumerates the pairs; a builder constant with no
+    harness counterpart is out of scope for this check.
+    """
+    text = text_of(REGRESSION_HARNESS)
+    matches = list(HEADER_CAPTURE_RE.finditer(text))
+    # Three captures expected; an extraction bug that finds fewer or more
+    # must not pass this test vacuously.
+    assert len(matches) == 3, matches
+    by_suffix = {None: HEADER_7, "8": HEADER_8, "9": HEADER_9}
+    for match in matches:
+        expected = by_suffix[match.group(1)]
+        captured = match.group(2) + "\n"
+        assert captured == expected, (
+            "the regression harness is frozen by a signed non-goal of this "
+            "package; if this pair diverges, the repair belongs to the "
+            "change that edited the conftest header or to a reversal of "
+            "that freeze — never to an edit here"
+        )

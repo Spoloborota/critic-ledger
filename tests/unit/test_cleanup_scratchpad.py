@@ -222,8 +222,23 @@ def test_missing_manifest_file(run, scratch):
     assert (f"FAIL condition 5 (manifest exists): manifest not found: No such "
             f"file or directory: {missing}" in res.stdout)
     assert "summary: deleted=0 refused=1 already-absent=0 skipped=0" in res.stdout
-    assert ("ledger header line(s) to write: 'scratchpad not cleaned: "
-            "<reason>, <path>' for each refusal" in res.stdout)
+    assert ("ledger header line(s) to write: 'Scratchpad not cleaned: "
+            "{reason, path}' for each refusal" in res.stdout)
+
+
+def test_the_missing_manifest_refusal_names_the_manual_remedy(run, scratch):
+    """A hand-built copy has no manifest, and the refusal says what to do.
+
+    The script will not delete a directory it cannot identify, so the
+    remedy it names is the caller's own, not a relaxed condition.
+    """
+    missing = scratch.root / "critic" / "runs" / "gone" / MANIFEST_NAME
+    res = run(SCRIPT, "--root", scratch.root, "--manifest", missing)
+    assert res.returncode == 1, res.stdout
+    assert "likely a copy built by hand rather than by copy-project.sh" \
+        in res.stdout
+    assert "remove it yourself, or rebuild the copy with copy-project.sh" \
+        in res.stdout
 
 
 def test_manifest_that_is_a_symlink(run, scratch):

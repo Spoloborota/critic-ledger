@@ -107,7 +107,7 @@ verification-pass table and column-by-column legend — is in
 Live `recount.py` output over that ledger, captured from a real run rather
 than written as an illustration. Reproduce it from
 [`examples/worked-round/`](examples/worked-round/) with
-`python3 ../../skills/critic-ledger/templates/recount.py fix-ledger.md`:
+`python3 ../../skills/critic-ledger/scripts/recount.py fix-ledger.md`:
 
 ```text
 rows: 12 | terminal: 12 | non-terminal: 0
@@ -117,6 +117,7 @@ residual-defect ESTIMATE (Jackknife capture-recapture): N-hat 14.0 | D 8 raised 
   ESTIMATE is ADVISORY, reported and never acted on: it enters no stop rule and no exit code. Lens diversity does not invalidate it (the source measured little or no impact on the estimate), but the caution that remains is OURS and is named as ours: our four field measurements put the single-lens share at 75-94% and N-hat near 2*D, and they count D as distinct CONFIRMED findings where this line counts distinct RAISED ones, so comparability is not established. Treat the number as advice, not as a target.
 new-findings curve: 1 -> 1 -> 0
   time axis: n/a (no started/ended columns — v1 passes table)
+stop criterion (verdict streak): met — passes 2, 3 both clean (0 NOT LANDED, 0 new major/blocker findings)
 ROUND CLOSABLE: zero non-terminal rows.
 ```
 
@@ -131,26 +132,29 @@ separate fixer, and letting a fresh verifier re-derive every claimed fix
 instead of reading the fixer's report. Every rule here is paired with the
 defect that forced it.
 
+A round runs under a PROFILE — F, M or L, assigned at adjudication from the
+number of confirmed findings or fixed in the contract — which sets how many
+verification passes and how fine the fix batches are, and nothing else.
+
 **There is no external benchmark for any of this, and none is claimed.** No
 controlled comparison against a baseline, no outside arbiter, no efficacy
 figure in this README. Collecting that evidence is planned, not done: the
-instrument shipped in 0.2.0 — the optional `observability` flag and its
-trace and rollup scripts (see [Privacy](#privacy)) — but the measurement
-itself has not been taken, and the CHANGELOG says so at every release rather
-than quietly.
+only instrument shipped is the optional OpenTelemetry receiver (see
+[Privacy](#privacy)), the measurement itself has not been taken, and the
+CHANGELOG says so at every release rather than quietly.
 
 **The first two below are hard limits; the rest is due diligence.**
 
-- Hard: **one object class.** Every closed run behind these rules was a
-  normative document. Nothing here has been exercised on code to the same
-  depth.
+- Hard: **one object class in the counted evidence.** Every counted run
+  behind these rules was a normative document; code has since passed through
+  impl rounds, but without a control arm, and not to the same depth.
 - Hard: **the verifiers share a model family** with the critics and the
   fixer; the re-derive mandate and the deterministic checks mitigate
   self-preference, they do not solve it. Verifier freshness is measured
-  externally, but its *cost* here is not.
+  externally, but its *premium* here is not.
 - Dogfooding — developing the discipline by running it on its own documents
-  — is circular by construction, and an independent trace audit reduces the
-  self-checking without removing it.
+  — is circular by construction, and an independent audit of the round's
+  records reduces the self-checking without removing it.
 - The plugin does not decide *when* to call critics — that stays with the
   user, which is why it is gated on an explicit request.
 
@@ -175,11 +179,10 @@ Then, on an object you want torn apart:
 
 **What a round costs:** at least 2 agent runs — two critics, when nothing they raise is
 upheld — around 4 on a typical small object, never more than the hard budget of 12
-simultaneous agents. Wall-clock, token and dollar cost is not measured, and no number
-for it is invented here. Since 0.2.0 the instrument exists — an optional
-`observability` flag, **on by default since 0.3.0**, that records per-round token and
-duration counts into local files (see [Privacy](#privacy)) — but the measurement it
-enables has not been taken, so there is still no figure to quote.
+simultaneous agents. The plugin measures none of that itself: the only counter source it
+ships is the optional OpenTelemetry receiver (see [Privacy](#privacy)), which you install
+yourself, and no cross-round measurement has been published, so there is still no typical
+figure to quote.
 
 Results land in a per-run folder `.critic-ledger/<timestamp-object>/` inside the
 reviewed repository — that round's ledger and, where it is private, the verbatim
@@ -191,77 +194,39 @@ auto-update is off.
 The plugin makes no network calls — nothing it produces ever leaves your
 machine. There is no analytics service and no telemetry upload of any kind.
 
-**Observability is on by default.** With it on, a round writes two files into
-that round's own folder `.critic-ledger/<run>/` inside the reviewed repository
-— `trace.jsonl` and `round-summary.json` — plus the cross-project
-`rounds.jsonl` described below. All of them are local files you own and can
-delete, computed from your own rounds; **nothing is sent anywhere** — no
-network call, no endpoint, no upload of any kind. Turning it off is one line:
-`"observability": false` in `pluginConfigs`, or `--config observability=false`
-at install.
+**A round writes no counters of its own.** The only instrument the plugin
+ships is the optional OpenTelemetry receiver described below, which you
+install yourself and which writes one local file you own and can delete;
+**nothing is sent anywhere** — no network call, no endpoint, no upload of
+any kind.
 
-Everything it produces is a local file you own: the per-run `.critic-ledger/`
+Everything a round produces is a local file you own: the per-run `.critic-ledger/`
 folder, git-ignored before it is created, and the scratch copies each critic
 reads, removed by the cleanup script. Where the reviewed repository is public
 or shared, the verbatim critic reports never enter it — they go instead to a
 local unversioned holding marked as not durable.
 
-### Observability — what it is, and what it writes
+### The OpenTelemetry receiver
 
-The flag is the plugin option `observability`: a boolean, `true` by default.
-Turn it off non-interactively at install time with
-`claude plugin install critic-ledger@spoloborota-plugins --config observability=false`,
-or at any time through `/plugin configure`; setting it back to `true` turns it
-on again. The value is read from `pluginConfigs` in your **user**
-`settings.json`. On Claude Code **v2.1.207 and later** a repository you clone
-cannot switch it on for you — *"Entries in a project's `.claude/settings.json`
-or `.claude/settings.local.json` are ignored"* — while on **older installs** it
-can, because before v2.1.207 those entries were read.
+The plugin ships an **optional** local OpenTelemetry receiver under
+`skills/critic-ledger/templates/otel/`. It is off until you install it
+yourself, and the plugin never starts it for you.
 
-With the flag on, a round writes three files and nothing else:
+There are two capture paths, and you pick one:
 
-- **`.critic-ledger/<run>/trace.jsonl`** — one line per unit of work in that
-  round, beside that round's ledger. Deleting the file is the complete opt-out
-  for it.
-- **`.critic-ledger/<run>/round-summary.json`** — that round's rolled-up counts
-  and durations, written beside the ledger at closure from the trace and the
-  ledger themselves. Deleting the file is the complete opt-out for it.
-- **`~/.claude/plugins/data/critic-ledger-*/rounds.jsonl`** — one line per
-  **closed** round. This file **accumulates across rounds and across projects
-  until you delete it**; `rm ~/.claude/plugins/data/critic-ledger-*/rounds.jsonl`
-  is the complete opt-out for it, and `claude plugin uninstall` removes the whole
-  data directory unless `--keep-data` is given.
+- **A user service** — the receiver runs as your own service (launchd on
+  macOS, a systemd user unit on Linux) and listens for OTLP/http on
+  localhost.
+- **A Docker collector** — the bundled compose file runs an OpenTelemetry
+  collector with a file exporter instead.
 
-**The trace's fields, in full** (`trace.jsonl`): `v`, `kind`, `round`, `span`,
-`parent`, `stage`, `actor`, `unit`, `id_prefix`, `agent_id`, `ids`, `id_tags`,
-`flags`, `model_assigned`, `model_actual`, `model_source`, `tokens`,
-`tokens_source`, `commit`, `started`, `ended`, `wallclock_s`, `outcome`. Two of
-those are identifiers rather than counts, and are named here rather than left to
-be discovered: **`agent_id`** is the platform's opaque id for the subagent spawn
-a line measures, and **`id_prefix`** is the lens or verifier prefix under which
-that actor raises findings. The rest are counts, durations, closed vocabularies
-and the run folder's own name. **No field carries free text** — no note, no
-message, no finding text, no path outside the run folder, and no content from
-the object under review.
+Either way the receiver writes ONE local file, on your own machine, which
+you own and can delete at any time; nothing is uploaded and no endpoint
+outside localhost is contacted.
 
-**The cross-project rollup's fields, in full** (`rounds.jsonl`): `v`,
-`round_key`, `date`, `mode` (the round mode, `plan` or `impl`, and nothing
-else), `wallclock_s`, `object` (three counts of how big the reviewed thing was
-and how much of it changed — `lines_at_pin`, `changed_lines`, `files_touched` —
-and not one file name among them), and the per-lens, per-batch and per-pass
-count and duration objects `lenses[]`, `batches[]`, `passes[]`, then `findings`,
-`totals` and `metrics`. **No field carries free text** here either. It
-deliberately carries **no object name, no absolute clock time and no commit
-hash**:
-`round_key` is a digest of the run folder's name and `date` is the UTC day the
-round closed. That is de-identification, not anonymization — a name you already
-guessed can be confirmed by hashing it; what it removes is the ability to read
-the list of everything you have ever reviewed off one file.
-
-Token counts come from the completed `Agent` tool result the orchestrator
-already receives — its four-counter breakdown where the result carries one,
-and its single total where that aggregate is all the result reports. No
-transcript is read, and the plugin ships no transcript reader.
+How to install it, how to check it is alive, and the privacy invariant its
+file is held to are in
+[`skills/critic-ledger/references/observability.md`](skills/critic-ledger/references/observability.md).
 
 ## Contributing
 

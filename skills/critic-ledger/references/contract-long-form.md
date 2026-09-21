@@ -2,7 +2,7 @@ Every path in this file is given relative to the skill directory ${CLAUDE_PLUGIN
 
 ## The contract — long form
 
-Principles 1–3 and 5–7 of the router's `## The contract`, verbatim. Principle 4 (the ledger row schema) stands in the router in full and is not repeated here.
+Principles 1–3 and 5–7 of the router's `## The contract`, verbatim. Principle 4 (the ledger row schema) stands in the router in full and is not repeated here. The closing paragraph is not a principle: it is the drafting rule for the lists a contract declares.
 
 1. **Critics are strictly read-only.** They never edit or write files and
    never run any state-changing git command (checkout/add/stash/restore/
@@ -24,14 +24,13 @@ Principles 1–3 and 5–7 of the router's `## The contract`, verbatim. Principl
 
 5. **Fixes are targeted batches, ≤10 ids each**, applied by a SEPARATE
    fixer subagent — never the main loop that adjudicated — run strictly
-   sequentially and with no git access at all. A batch is coherent BY
-   TARGET FILE: it is assembled from findings that edit the same file (a
-   file with more than ten is cut along its sections), not by lens and not
-   by claim topic. The ORCHESTRATOR commits after every batch, with the
-   finding ids in the commit message and the commit hash written into the
-   fix cells immediately. Never "fix" a document by wholesale rewrite —
-   rewrites silently drop both fixed and unrelated content; a rewrite is a
-   new artifact requiring a fresh round.
+   sequentially and with no git access at all. A batch is coherent BY ZONE
+   AND BY KIND, as references/stage-7-fix-batches.md 7.6 defines it, not by
+   lens and not by claim topic. The ORCHESTRATOR commits after every batch,
+   with the finding ids in the commit message and the commit hash written
+   into the fix cells immediately. Never "fix" a document by wholesale
+   rewrite — rewrites silently drop both fixed and unrelated content; a
+   rewrite is a new artifact requiring a fresh round.
 6. **Verification is a separate pass by a FRESH actor on EVERY pass** —
    never a continuation of the critic, never a continuation of the previous
    verifier, and structurally never the fixer, since the fixer is a
@@ -75,3 +74,10 @@ Principles 1–3 and 5–7 of the router's `## The contract`, verbatim. Principl
    is reported as awaiting ratification, never as closed. The mechanism —
    who nominates, against what register, and how ratification happens — is
    stage 9.
+
+**A list the contract declares is copied, never remembered.** A survival or
+completeness list — what a rename legitimately leaves standing, what a sweep
+must find — is copied verbatim from the ratified text that defines it, never
+enumerated from memory, and names every token shape the identifier takes
+(bare word, `UPPER_CASE` variable, hyphenated and path components) or states
+which shapes it does not sweep.

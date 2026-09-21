@@ -19,7 +19,22 @@
 #                   copy what git knows, so on a tree that mixes the project
 #                   with ignored runtime state it would WIDEN the copy in
 #                   silence. That pre-flight gate is fail-closed and has no
-#                   opt-out.
+#                   opt-out. A SECOND pre-flight covers the other half of the
+#                   same problem: content that is neither versioned nor
+#                   ignored — a `.venv/`, a build directory — is runtime
+#                   state that no `.gitignore` happened to declare. It runs
+#                   on EVERY tree, whatever the ignored-content gate above
+#                   decided, and any untracked DIRECTORY, or more than five
+#                   untracked loose files, blocks the clone too. What blocks
+#                   the clone and what is dropped from the file list are two
+#                   different sets, and the second set governs EVERY step:
+#                   whatever this pre-flight names EXCLUDED is left out of
+#                   steps 2-3 as well as of step 1. Directories go into that
+#                   set whenever they exist, loose files only when their own
+#                   count fired the gate — and neither does when it is the
+#                   object under review, because an uncommitted file, or an
+#                   uncommitted directory, may well BE that object: it is
+#                   then kept, and recorded as kept.
 #   STEP2-FILELIST  fallback when the clone is impossible: copy the files git
 #                   knows about (tracked + untracked-not-ignored); `.git`
 #                   itself only with --with-git-history.
@@ -82,6 +97,13 @@ note() { printf 'NOTICE: %s\n' "$*"; }
 usage() {
   printf 'usage: %s --src <project root> --dest <scratchpad run dir>\n' "$PROG" >&2
   printf '            [--with-git-history] [--object-only <path>] [--run-id <id>]\n' >&2
+  printf 'steps, tried in order: STEP1-CLONE (strict copy-on-write clone),\n' >&2
+  printf '  STEP2-FILELIST (copy what git knows), STEP3-NARROWED (--object-only\n' >&2
+  printf '  and its surroundings). STEP1 is blocked by ANY git-ignored content\n' >&2
+  printf '  under --src, or by any untracked runtime state (any untracked\n' >&2
+  printf '  directory, or more than five untracked loose files) — two fail-closed\n' >&2
+  printf '  pre-flights, no opt-out.\n' >&2
+  printf -- '--run-id MUST equal the basename of --dest and defaults to it.\n' >&2
 }
 
 # ---------------------------------------------------------------- arguments --
@@ -168,6 +190,17 @@ else
   OBJECT_REL=
 fi
 
+# True when <relative path> is the object under check or lies inside it.
+# It is defined HERE, above the step-1 pre-flight, because that pre-flight
+# already needs it: an object it recorded as excluded is a file the copy
+# keeps and the manifest disowns.
+is_object() { # <relative path>
+  [ -n "$OBJECT_REL" ] || return 1
+  [ "$1" = "$OBJECT_REL" ] && return 0
+  case "$1/" in "$OBJECT_REL"/*) return 0 ;; esac
+  return 1
+}
+
 # The manifest's run_id is what cleanup-scratchpad.py compares against the
 # basename of the directory it is asked to remove (its condition 7). An id that
 # differs from that basename — a lens suffix appended to the run id, as
@@ -251,6 +284,103 @@ elif [ -s "$TMPD/ignored.z" ]; then
   done <"$TMPD/ignored.txt"
   note "step 1 (strict clone) not run: --src carries git-ignored content ($(wc -l <"$TMPD/ignored.txt" | tr -d ' ') top-level entries listed as EXCLUDED); the copy is built from the git-known file list instead"
 fi
+
+# The SECOND half of the same predicate: content that is neither versioned
+# nor ignored. `.gitignore` is a statement of intent, and runtime state that
+# nobody bothered to ignore — a `.venv/`, a `node_modules/`, a build
+# directory — is invisible to the sweep above while being exactly the thing
+# the clone must not widen the copy with. What counts as NON-TRIVIAL is
+# spelled out rather than felt: any untracked DIRECTORY (an unversioned
+# SUBTREE is runtime state by construction; `--directory` collapses each to
+# one entry), or more untracked loose files than UNTRACKED_FILE_LIMIT. A
+# stray note or an editor backup beside the project is the normal state of a
+# working tree and does not widen the copy meaningfully; a subtree does.
+# The fallback is steps 2-3, which take what git knows — the same fail-closed
+# direction the ignored-content gate above takes, for the same reason.
+#
+# What TRIGGERS the fallback and what is EXCLUDED from the copy are two
+# different sets, and conflating them cost the round its object: an
+# uncommitted spec under review is a normal thing to critique, and dropping
+# it because an unrelated `.venv/` sat beside it would have removed the very
+# file the critics were pointed at. So: untracked DIRECTORIES are excluded
+# whenever they exist — unless the directory IS the object under check, which
+# an uncommitted spec folder written for this round routinely is — while
+# untracked LOOSE FILES are excluded only when
+# they are themselves the reason the gate fired — the count passing
+# UNTRACKED_FILE_LIMIT. Below the limit they stay in the copy and are listed
+# as `class=untracked-kept`, so the list still names every entry the
+# pre-flight saw and says which way each one went.
+#
+# This pre-flight runs UNCONDITIONALLY, and in particular when the
+# ignored-content gate above has already disabled step 1. The two gates
+# answer different questions: that one only decides whether the clone may
+# run, while this one also produces the exclusion set steps 2-3 filter their
+# file list by. Gating it on the first one left that set unwritten on every
+# tree carrying BOTH ignored content and an untracked subtree — the ordinary
+# state of a real repository — and steps 2-3, which list untracked content
+# file by file rather than as a directory, then copied the subtree in full.
+UNTRACKED_FILE_LIMIT=5
+git -C "$SRC_R" ls-files -z --others --exclude-standard --directory \
+  >"$TMPD/untracked.z" 2>"$TMPD/untracked.err"
+UNTRACKED_RC=$?
+if [ "$UNTRACKED_RC" -ne 0 ]; then
+  PREFLIGHT_OK=0
+  note "step 1 (strict clone) not run: the untracked-content pre-flight failed (exit $UNTRACKED_RC): $(tr '\n' ' ' <"$TMPD/untracked.err")"
+  printf 'git pre-flight | class=git-preflight-failed (git ls-files --others exit %s)\n' \
+    "$UNTRACKED_RC" >>"$PREFLIGHT_LIST"
+elif [ -s "$TMPD/untracked.z" ]; then
+  tr '\0' '\n' <"$TMPD/untracked.z" >"$TMPD/untracked.txt"
+  UNTRACKED_DIRS=0
+  UNTRACKED_FILES=0
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "$p" in
+      */) UNTRACKED_DIRS=$((UNTRACKED_DIRS + 1)) ;;
+      *)  UNTRACKED_FILES=$((UNTRACKED_FILES + 1)) ;;
+    esac
+  done <"$TMPD/untracked.txt"
+  if [ "$UNTRACKED_DIRS" -gt 0 ] || [ "$UNTRACKED_FILES" -gt "$UNTRACKED_FILE_LIMIT" ]; then
+    PREFLIGHT_OK=0
+    # Steps 2-3 take tracked PLUS untracked-not-ignored files, so falling
+    # back to them would carry the very content this gate just refused.
+    # The excluded entries are therefore recorded for the file-list filter
+    # as well: what the gate names EXCLUDED is excluded from every step,
+    # not from step 1 alone. Loose files below the limit are NOT in that
+    # set — they are the object-under-review case, and they are kept.
+    if [ "$UNTRACKED_FILES" -gt "$UNTRACKED_FILE_LIMIT" ]; then
+      LOOSE_CLASS=untracked-volume
+    else
+      LOOSE_CLASS=untracked-kept
+    fi
+    : >"$TMPD/untracked-excluded.txt"
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      case "$p" in
+        # A DIRECTORY may be the object under check too — an uncommitted spec
+        # folder written for this very round — and `is_object()` accepts one
+        # (it matches by prefix, and the trailing slash `--directory` adds is
+        # part of that match). The file-list filter below then keeps every
+        # file under it, so recording the directory as `untracked-volume`
+        # would be the same false account as for a loose file, one level up.
+        */) cls=untracked-volume
+            if is_object "$p"; then
+              cls=untracked-kept
+            fi ;;
+        # The object under check is KEPT by the file-list filter below even
+        # past the limit, so the pre-flight must not RECORD it as excluded:
+        # a kept file named `untracked-volume` in the manifest and on stdout
+        # is a false account of what the copy holds.
+        *)  cls=$LOOSE_CLASS
+            if [ "$cls" = untracked-volume ] && is_object "$p"; then
+              cls=untracked-kept
+            fi ;;
+      esac
+      [ "$cls" = untracked-kept ] || printf '%s\n' "$p" >>"$TMPD/untracked-excluded.txt"
+      printf '%s | class=%s\n' "$p" "$cls" >>"$PREFLIGHT_LIST"
+    done <"$TMPD/untracked.txt"
+    note "step 1 (strict clone) not run: --src carries a non-trivial volume of non-git content beside .git ($UNTRACKED_DIRS untracked director(ies) — excluded unless one is the object under check; $UNTRACKED_FILES untracked loose file(s) — $LOOSE_CLASS, limit $UNTRACKED_FILE_LIMIT); the copy is built from the git-known file list instead"
+  fi
+fi
 reset_excluded
 
 # ------------------------------------------------------ step 1: strict clone --
@@ -300,11 +430,19 @@ is_secret_base() { # <basename> -> echoes the matched class, or nothing
   esac
 }
 
-# True when <relative path> is the object under check or lies inside it.
-is_object() { # <relative path>
-  [ -n "$OBJECT_REL" ] || return 1
-  [ "$1" = "$OBJECT_REL" ] && return 0
-  case "$1/" in "$OBJECT_REL"/*) return 0 ;; esac
+# Whether a path is inside the untracked volume the step-1 pre-flight
+# refused. Empty (or absent) list = the gate never fired and nothing matches.
+# Directory entries arrive from `--directory` with a trailing slash, so a
+# prefix match on them is exact rather than a substring guess.
+is_untracked_volume() { # <relative path>
+  [ -s "$TMPD/untracked-excluded.txt" ] || return 1
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    case "$e" in
+      */) case "$1/" in "$e"*) return 0 ;; esac ;;
+      *)  [ "$1" = "$e" ] && return 0 ;;
+    esac
+  done <"$TMPD/untracked-excluded.txt"
   return 1
 }
 
@@ -333,6 +471,13 @@ build_file_list() {
       if [ ! -e "$SRC_R/$p" ] && [ ! -L "$SRC_R/$p" ]; then
         note "skipped (tracked but missing from the work tree): $p" >&2
         continue
+      fi
+      if is_untracked_volume "$p"; then
+        if is_object "$p"; then
+          note "kept $p: it is the object under check, untracked-volume exclusion not applied" >&2
+        else
+          continue
+        fi
       fi
       cls=$(is_secret_base "$(basename "$p")")
       if [ -n "$cls" ] && ! is_object "$p"; then
@@ -490,7 +635,7 @@ MANIFEST="$DEST_R/$MANIFEST_NAME"
 {
   printf '{\n'
   printf '  "manifest_version": "%s",\n' "$MANIFEST_VERSION"
-  printf '  "created_by": "critic-ledger/templates/%s",\n' "$PROG"
+  printf '  "created_by": "critic-ledger/scripts/%s",\n' "$PROG"
   printf '  "created_at": "%s",\n' "$CREATED_AT"
   printf '  "run_id": "%s",\n' "$(json_escape "$RUN_ID")"
   printf '  "absolute_path": "%s",\n' "$(json_escape "$DEST_R")"

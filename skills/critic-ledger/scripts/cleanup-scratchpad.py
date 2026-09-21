@@ -31,7 +31,8 @@ and the two-step shape protects against a WRONG PATH, not against the
 orchestrator. The dry-run output goes into the ledger header.
 
 Any refusal is a RECORD, not a crash: the directory stays where it is and the
-ledger header gets the line "scratchpad not cleaned: reason, path".
+ledger header's `Scratchpad not cleaned:` field takes `{reason, path}` — the
+same field a cleaned run fills with `cleaned {date}`.
 
 
 THE MANIFEST FORMAT
@@ -287,7 +288,15 @@ def read_manifest(unit: Unit) -> bool:
     try:
         st = os.lstat(path)
     except OSError as exc:
-        unit.check(5, FAIL, f"manifest not found: {exc.strerror}: {path}")
+        unit.check(
+            5,
+            FAIL,
+            f"manifest not found: {exc.strerror}: {path} — likely a copy "
+            f"built by hand rather than by copy-project.sh; this script "
+            f"will not clean it: check the directory is ephemeral and "
+            f"remove it yourself, or rebuild the copy with "
+            f"copy-project.sh so that it carries a manifest",
+        )
         return False
     if stat.S_ISLNK(st.st_mode):
         unit.check(5, FAIL, f"manifest is a symbolic link, refused: {path}")
@@ -927,7 +936,7 @@ def main(argv: list[str] | None = None) -> int:
     if refused:
         print(
             "ledger header line(s) to write: "
-            "'scratchpad not cleaned: <reason>, <path>' for each refusal",
+            "'Scratchpad not cleaned: {reason, path}' for each refusal",
         )
     return 1 if refused else 0
 

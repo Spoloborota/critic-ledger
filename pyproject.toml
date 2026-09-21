@@ -1,7 +1,12 @@
 # Lint/type-check configuration for the plugin's Python scripts
-# (skills/critic-ledger/templates/*.py). There is no Python package to
-# build here — the scripts are standalone, stdlib-only, invoked directly —
-# so this file carries tooling configuration only.
+# (skills/critic-ledger/scripts/*.py) and its OpenTelemetry receiver
+# (skills/critic-ledger/templates/otel/*.py). There is no Python package
+# to build here — the files are stdlib-only and loose: the scripts with
+# an entry point are invoked directly, while the modules without one
+# (ledger_model, statuses, structural_checks, metrics, report) are imported
+# by recount.py and by one another, and every script or module that imports
+# ledger_md.py needs it beside it — so this file carries tooling
+# configuration only.
 #
 # Policy: the strictest available baseline (ruff `select = ALL`,
 # `mypy --strict`), with a short ignore list where every entry states its
@@ -14,7 +19,9 @@ line-length = 88
 # this project's first release, so it is not a defensible floor for scripts
 # that run on end users' machines.
 target-version = "py311"
-include = ["skills/critic-ledger/templates/*.py"]
+# A directory run is filtered through this list, so the OpenTelemetry receiver
+# under templates/otel is named here as the second root, as it is for mypy.
+include = ["skills/critic-ledger/scripts/*.py", "skills/critic-ledger/templates/otel/*.py"]
 # `select = ALL` silently adopts new rules on every ruff upgrade (the official
 # docs warn about exactly this), so the ruff version is pinned here and in CI;
 # upgrades are deliberate, with a re-lint.
@@ -56,7 +63,7 @@ convention = "google"
 [tool.mypy]
 strict = true
 python_version = "3.11"
-files = ["skills/critic-ledger/templates"]
+files = ["skills/critic-ledger/scripts", "skills/critic-ledger/templates/otel"]
 # NOT part of --strict, and worth having: unreachable branches are exactly
 # the defect class strict typing is meant to surface.
 warn_unreachable = true
@@ -96,7 +103,7 @@ xfail_strict = true
 # subprocesses run with their own working directory under pytest's tmp_path,
 # so a relative data-file path would scatter them where combine cannot find
 # them.
-source = ["skills/critic-ledger/templates"]
+source = ["skills/critic-ledger/scripts", "skills/critic-ledger/templates/otel"]
 patch = ["subprocess"]
 relative_files = true
 # The parent process of the run is pytest, which is not in `source`, so its own
@@ -111,5 +118,8 @@ disable_warnings = ["no-data-collected"]
 # missed). The gate sits two points below that so a platform-dependent branch
 # or a re-ordered run cannot fail CI on noise; it is raised deliberately, the
 # way the linter pins are.
+# Re-measured 2026-09-15, when the scripts moved to `scripts/` and `recount.py`
+# was split, over the two roots `scripts` and `templates/otel`: 92.28% (2903
+# statements, 224 missed).
 fail_under = 92
 show_missing = true

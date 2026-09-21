@@ -1,4 +1,4 @@
-"""Characterization tests for `templates/copy-project.sh`.
+"""Characterization tests for `scripts/copy-project.sh`.
 
 The first tests this script has ever had. Until now its only coverage was
 `test_payload_invariants.py` (which reads it as a file) plus shellcheck —
@@ -28,14 +28,45 @@ invocation, so the rest of the run is unmodified.
 from __future__ import annotations
 
 import json
+import platform
 import shutil
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
 
 SCRIPT = "copy-project.sh"
 MANIFEST_NAME = "critic-ledger-manifest.json"
+
+
+def strict_clone_available(tmp_path: Path) -> bool:
+    """Probe whether this host's copy-on-write clone (the one `copy-project.sh`
+    step 1 uses) actually works here.
+
+    GitHub's `ubuntu-24.04` runner has no reflink-capable root filesystem, so
+    `cp -R --reflink=always` there always fails and the script falls back to
+    STEP2-FILELIST — a documented, deliberate behaviour, not a bug. Tests that
+    assert on STEP1-CLONE must therefore branch on this probe instead of
+    assuming the clone succeeds, so that the fallback path is TESTED on such
+    hosts rather than silently skipped (the published suite has zero skips).
+    """
+    probe_dir = tmp_path / "clone-probe"
+    probe_dir.mkdir(exist_ok=True)
+    src = probe_dir / "src"
+    dst = probe_dir / "dst"
+    src.write_text("probe\n", encoding="utf-8")
+    if dst.exists():
+        dst.unlink()
+    system = platform.system()
+    if system == "Darwin":
+        cmd = ["cp", "-Rc", str(src), str(dst)]
+    elif system == "Linux":
+        cmd = ["cp", "-R", "--reflink=always", "-T", str(src), str(dst)]
+    else:
+        return False
+    result = subprocess.run(cmd, capture_output=True)
+    return result.returncode == 0
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +151,12 @@ def test_clean_tree_takes_step_1(run_sh, clean_project, tmp_path):
     dest = dest_under(tmp_path)
     result = run_sh(SCRIPT, "--src", clean_project.path, "--dest", dest)
     assert result.returncode == 0, result.stderr
-    assert "STEP1-CLONE" in result.stdout
+    if strict_clone_available(tmp_path):
+        assert "STEP1-CLONE" in result.stdout
+    else:
+        assert "strict clone unavailable" in result.stdout
+        assert "STEP2-FILELIST" in result.stdout
+        assert "STEP1-CLONE" not in result.stdout
 
 
 def test_clean_tree_reports_no_git_ignored_exclusion(
@@ -146,6 +182,272 @@ def test_clean_tree_copy_has_no_git_directory(run_sh, clean_project, tmp_path):
     assert not (dest / ".git").exists()
     assert any("class=git-history" in line
                for line in excluded_lines(result.stdout))
+
+
+@pytest.fixture
+def untracked_project(make_repo):
+    """A repository carrying an unversioned SUBTREE nobody thought to ignore.
+
+    `.gitignore` is a statement of intent, and the runtime state that hurts
+    is the state nobody got round to declaring: this `.venv/` is neither
+    versioned nor ignored, so the ignored-content gate does not see it.
+    """
+    repo = make_repo("project")
+    repo.write("README.md", "# project\n")
+    repo.write("src/app.py", "print('hi')\n")
+    repo.commit("initial")
+    repo.write(".venv/pyvenv.cfg", "home = /usr/local\n")
+    repo.write(".venv/lib/site-packages/token.txt", "runtime state\n")
+    return repo
+
+
+# ---------------------------------------------------------------------------
+# (a-bis) a tree with UNTRACKED, un-ignored runtime state: step 1 is not run
+# ---------------------------------------------------------------------------
+
+
+def test_an_untracked_subtree_blocks_step_1(run_sh, untracked_project, tmp_path):
+    """The DoD case: a `.venv/`-like directory is absent from the copy.
+
+    Before the second pre-flight the clone took the whole tree, `.venv/`
+    included, and the disclosure sweep removed only secret-class paths — so
+    runtime state reached the critics unannounced.
+    """
+    dest = dest_under(tmp_path)
+    result = run_sh(SCRIPT, "--src", untracked_project.path, "--dest", dest)
+    assert result.returncode == 0, result.stderr
+    assert "STEP1-CLONE" not in result.stdout
+    assert "STEP2-FILELIST" in result.stdout
+    files = copy_files(dest)
+    assert {"README.md", "src/app.py"} <= files
+    assert not any(f.startswith(".venv/") for f in files), files
+
+
+def test_an_untracked_subtree_is_named_in_the_notice_and_the_list(
+    run_sh, untracked_project, tmp_path
+):
+    dest = dest_under(tmp_path)
+    result = run_sh(SCRIPT, "--src", untracked_project.path, "--dest", dest)
+    notices = [line for line in result.stdout.splitlines()
+               if line.startswith("NOTICE: ")]
+    assert any("step 1 (strict clone) not run" in line
+               and "non-trivial volume of non-git content" in line
+               for line in notices), notices
+    assert any(".venv/" in line and "class=untracked-volume" in line
+               for line in excluded_lines(result.stdout)), result.stdout
+
+
+def test_a_lone_untracked_file_survives_the_subtree_exclusion(
+    run_sh, untracked_project, tmp_path
+):
+    """What TRIGGERS the fallback and what is EXCLUDED are two sets.
+
+    An uncommitted spec under review is a normal thing to critique. Dropping
+    it because an unrelated `.venv/` sat beside it would remove the very file
+    the critics were pointed at, so a loose file is excluded only when the
+    loose-file count is itself the reason the gate fired.
+    """
+    untracked_project.write("draft-spec.md", "# not committed yet\n")
+    dest = dest_under(tmp_path)
+    result = run_sh(SCRIPT, "--src", untracked_project.path, "--dest", dest)
+    assert result.returncode == 0, result.stderr
+    assert "STEP1-CLONE" not in result.stdout
+    files = copy_files(dest)
+    assert not any(f.startswith(".venv/") for f in files), files
+    assert "draft-spec.md" in files, files
+    excluded = excluded_lines(result.stdout)
+    assert any(".venv/" in line and "class=untracked-volume" in line
+               for line in excluded), excluded
+    assert any("draft-spec.md" in line and "class=untracked-kept" in line
+               for line in excluded), excluded
+
+
+def test_one_stray_untracked_file_does_not_block_step_1(
+    run_sh, clean_project, tmp_path
+):
+    """A note or an editor backup beside the project is the normal state of
+    a working tree: the gate is about VOLUME, not about purity.
+    """
+    clean_project.write("scratch.txt", "a note\n")
+    dest = dest_under(tmp_path)
+    result = run_sh(SCRIPT, "--src", clean_project.path, "--dest", dest)
+    assert result.returncode == 0, result.stderr
+    if strict_clone_available(tmp_path):
+        assert "STEP1-CLONE" in result.stdout
+    else:
+        assert "strict clone unavailable" in result.stdout
+        assert "STEP2-FILELIST" in result.stdout
+        assert "STEP1-CLONE" not in result.stdout
+    assert "scratch.txt" in copy_files(dest)
+
+
+def test_many_stray_untracked_files_block_step_1(
+    run_sh, clean_project, tmp_path
+):
+    """Past the limit the loose files are runtime state like any subtree."""
+    for i in range(6):
+        clean_project.write(f"scratch{i}.txt", "a note\n")
+    dest = dest_under(tmp_path)
+    result = run_sh(SCRIPT, "--src", clean_project.path, "--dest", dest)
+    assert result.returncode == 0, result.stderr
+    assert "STEP1-CLONE" not in result.stdout
+    assert "STEP2-FILELIST" in result.stdout
+    assert not any(f.startswith("scratch") for f in copy_files(dest))
+
+
+@pytest.fixture
+def ignored_and_untracked_project(make_repo):
+    """BOTH halves of the pre-flight at once — the ordinary real repository.
+
+    Git-ignored runtime state and an untracked, un-ignored subtree side by
+    side. The ignored-content gate fires first; the untracked pre-flight,
+    which is what produces the exclusion set steps 2-3 filter their file list
+    by, must still run. While it was gated on the first gate having found
+    nothing, that set was never written on such a tree and the subtree
+    reached the copy file by file — `ls-files --others` without `--directory`
+    lists it one file at a time, and none of them was filtered.
+    """
+    repo = make_repo("project")
+    repo.write("README.md", "# project\n")
+    repo.write(".gitignore", "ignored/\n")
+    repo.commit("initial")
+    repo.write("ignored/junk.txt", "x\n")
+    repo.write("subtree/file.txt", "y\n")
+    return repo
+
+
+def test_an_untracked_subtree_is_excluded_beside_ignored_content(
+    run_sh, ignored_and_untracked_project, tmp_path
+):
+    """The second gate is not conditional on what the first one found."""
+    dest = dest_under(tmp_path)
+    result = run_sh(SCRIPT, "--src", ignored_and_untracked_project.path,
+                    "--dest", dest)
+    assert result.returncode == 0, result.stderr
+    files = copy_files(dest)
+    assert "subtree/file.txt" not in files, files
+    assert {".gitignore", "README.md"} <= files
+    excluded = excluded_lines(result.stdout)
+    assert "subtree/ | class=untracked-volume" in excluded, excluded
+    assert "ignored/ | class=git-ignored" in excluded, excluded
+    manifest = json.loads((dest / MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert "subtree/ | class=untracked-volume" in manifest["excluded"]
+
+
+# ---------------------------------------------------------------------------
+# (a-ter) --object-only: the object under review is kept, and SAID to be kept
+# ---------------------------------------------------------------------------
+
+
+def test_the_object_is_never_recorded_as_untracked_volume(
+    run_sh, clean_project, tmp_path
+):
+    """A file that is IN the copy is never named excluded in the record.
+
+    Past the loose-file limit every untracked file is excluded — except the
+    one the critics were pointed at. The pre-flight classifies before
+    `--object-only` is consulted, so the exemption has to be known there too:
+    a kept file listed as `untracked-volume` is a false account of the copy.
+    """
+    for i in range(6):
+        clean_project.write(f"scratch{i}.txt", "a note\n")
+    dest = dest_under(tmp_path)
+    result = run_sh(SCRIPT, "--src", clean_project.path, "--dest", dest,
+                    "--object-only", "scratch0.txt")
+    assert result.returncode == 0, result.stderr
+    files = copy_files(dest)
+    assert "scratch0.txt" in files, files
+    assert "scratch1.txt" not in files, files
+    excluded = excluded_lines(result.stdout)
+    assert "scratch0.txt | class=untracked-kept" in excluded, excluded
+    assert "scratch0.txt | class=untracked-volume" not in excluded, excluded
+    assert "scratch1.txt | class=untracked-volume" in excluded, excluded
+    manifest = json.loads((dest / MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert "scratch0.txt | class=untracked-volume" not in manifest["excluded"]
+
+
+@pytest.fixture
+def untracked_object_project(make_repo):
+    """A repository whose object under review is an UNCOMMITTED DIRECTORY.
+
+    The loose-file case above has a directory counterpart, and it is the
+    ordinary one: a spec folder written for this very round is an untracked
+    DIRECTORY — precisely what the pre-flight refuses in general, and
+    precisely what the critics were pointed at in this particular round.
+    """
+    repo = make_repo("project")
+    repo.write("README.md", "# project\n")
+    repo.commit("initial")
+    repo.write("draft/spec.md", "# not committed yet\n")
+    repo.write("draft/notes.md", "notes\n")
+    return repo
+
+
+def test_an_object_that_is_an_untracked_directory_is_kept_and_said_to_be_kept(
+    run_sh, untracked_object_project, tmp_path
+):
+    """The same false record as the loose-file case, one level up.
+
+    `is_object()` accepts a directory — it matches by prefix, and the
+    trailing slash `--directory` adds is part of that match — and the file
+    list keeps every file under it. Recording that directory as
+    `untracked-volume` therefore describes a copy that is not the one on
+    disk, which is the defect the loose-file branch was already fixed for.
+    """
+    dest = dest_under(tmp_path)
+    result = run_sh(SCRIPT, "--src", untracked_object_project.path,
+                    "--dest", dest, "--object-only", "draft")
+    assert result.returncode == 0, result.stderr
+    assert "STEP1-CLONE" not in result.stdout
+    files = copy_files(dest)
+    assert {"draft/spec.md", "draft/notes.md"} <= files, files
+    excluded = excluded_lines(result.stdout)
+    assert "draft/ | class=untracked-kept" in excluded, excluded
+    assert "draft/ | class=untracked-volume" not in excluded, excluded
+    manifest = json.loads((dest / MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert "draft/ | class=untracked-volume" not in manifest["excluded"]
+
+
+def test_an_untracked_directory_that_is_not_the_object_is_still_excluded(
+    run_sh, untracked_object_project, tmp_path
+):
+    """The exemption is for the object alone, never for directories at large.
+
+    Without this half the fix above would read as "untracked directories are
+    kept whenever `--object-only` is given", which is the widening the
+    pre-flight exists to prevent.
+    """
+    untracked_object_project.write(".venv/pyvenv.cfg", "home = /usr/local\n")
+    dest = dest_under(tmp_path)
+    result = run_sh(SCRIPT, "--src", untracked_object_project.path,
+                    "--dest", dest, "--object-only", "draft")
+    assert result.returncode == 0, result.stderr
+    files = copy_files(dest)
+    assert "draft/spec.md" in files, files
+    assert not any(f.startswith(".venv/") for f in files), files
+    excluded = excluded_lines(result.stdout)
+    assert ".venv/ | class=untracked-volume" in excluded, excluded
+
+
+def test_the_object_survives_the_secret_class_sweep(
+    run_sh, mixed_project, tmp_path
+):
+    """`is_object()` bypasses the disclosure sweep, and the bypass is said.
+
+    A secret-class file can BE the object under review. It is then kept, in
+    the copy and in the record, with a NOTICE naming the reason — the one
+    place the sweep is allowed not to remove what it found.
+    """
+    mixed_project.write(".env", "placeholder=fixture\n")
+    mixed_project.commit("add the env file under review")
+    dest = dest_under(tmp_path)
+    result = run_sh(SCRIPT, "--src", mixed_project.path, "--dest", dest,
+                    "--object-only", ".env")
+    assert result.returncode == 0, result.stderr
+    assert ".env" in copy_files(dest)
+    assert "kept .env: it is the object under check" in result.stdout
+    assert not any(line.startswith(".env |")
+                   for line in excluded_lines(result.stdout))
 
 
 # ---------------------------------------------------------------------------

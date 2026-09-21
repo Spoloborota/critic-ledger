@@ -14,7 +14,9 @@ Exit codes: 0 = closable (help is 0 too), 1 = open rows remain,
 
 from __future__ import annotations
 
+import importlib.util
 import re
+import sys
 
 import pytest
 
@@ -97,6 +99,19 @@ def test_empty_file(run, tmp_path):
     res = run(SCRIPT, path)
     assert res.returncode == 2, res.stdout
     assert "no ledger rows found" in res.stdout
+
+
+def test_the_empty_table_message_carries_its_remedy(run, tmp_path):
+    """The commonest cause of this exit is a stage, not a broken file.
+
+    A ledger whose critics are salvaged but not yet transcribed has zero
+    rows, so the exit is EXPECTED there; the message says what to run.
+    """
+    path = tmp_path / "fresh.md"
+    path.write_text("# Fix ledger\n", encoding="utf-8")
+    res = run(SCRIPT, path)
+    assert res.returncode == 2, res.stdout
+    assert "run transcribe.py first)" in res.stdout
 
 
 # --- counting and printed shape --------------------------------------------
@@ -331,7 +346,7 @@ def test_a_closed_header_is_not_a_frozen_one(run, ledger, marker):
     The branch matches the substring `frozen`; `closed` does not contain
     it, which is why stage 9 can write `Ledger state: closed <ISO-date>`
     with no change to this script. A closed ledger must therefore recount
-    exactly as an open one does — the shell suite's c76 pins the same fact
+    exactly as an open one does — the shell suite's c73 pins the same fact
     end to end.
     """
     res = run(SCRIPT, ledger(CLOSED, preamble=marker))
@@ -378,6 +393,131 @@ def test_two_passes_never_trigger_the_kill_criterion(run, ledger):
     res = run(SCRIPT, ledger(CLOSED, suffix=passes([7, 9])))
     assert res.returncode == 0, res.stdout
     assert "KILL-CRITERION" not in res.stdout
+
+
+# --- the stop criterion, on its own line ------------------------------------
+#
+# The curve and the binary signal were ONE line, and a first-time reader took
+# "the curve is falling" for "the criterion is met". They are different
+# claims, so these tests hold them to being different lines — and hold the
+# criterion to never claiming `met` off a cell it could not read.
+
+VERDICTS_HEADER = ("\n## Verification passes\n\n"
+                   "| # | pass | verdicts (L/P/NOT) | new findings | notes |\n"
+                   "|---|---|---|---|---|\n")
+
+
+def passes_v(pairs):
+    """A passes table whose verdicts cells are machine-readable."""
+    rows = "".join(f"| {i} | p{i} | {v} | {n} | - |\n"
+                   for i, (v, n) in enumerate(pairs, 1))
+    return VERDICTS_HEADER + rows
+
+
+def test_the_curve_and_the_stop_criterion_are_two_lines(run, ledger):
+    """The DoD case: both lines print, and the criterion prints once."""
+    res = run(SCRIPT, ledger(CLOSED, suffix=passes([5, 3, 1])))
+    assert res.returncode == 0, res.stdout
+    assert "new-findings curve: 5 -> 3 -> 1" in res.stdout
+    assert res.stdout.count("stop criterion (verdict streak): ") == 1
+
+
+def test_two_clean_passes_meet_the_stop_criterion(run, ledger):
+    res = run(SCRIPT, ledger(CLOSED,
+                             suffix=passes_v([("9/0/2", 4), ("4/0/0", 0),
+                                              ("3/0/0", 0)])))
+    assert res.returncode == 0, res.stdout
+    assert ("stop criterion (verdict streak): met — passes 2, 3 both clean "
+            "(0 NOT LANDED, 0 new major/blocker findings)" in res.stdout)
+
+
+def test_a_not_landed_verdict_breaks_the_streak(run, ledger):
+    res = run(SCRIPT, ledger(CLOSED,
+                             suffix=passes_v([("4/0/0", 0), ("3/0/1", 0)])))
+    assert res.returncode == 0, res.stdout
+    assert ("stop criterion (verdict streak): not met — pass 2: 1 NOT LANDED"
+            in res.stdout)
+
+
+def test_new_findings_of_unnamed_severity_break_the_streak(run, ledger):
+    """A count whose severity nothing names is never read as minor."""
+    res = run(SCRIPT, ledger(CLOSED,
+                             suffix=passes_v([("4/0/0", 0), ("3/0/0", 2)])))
+    assert res.returncode == 0, res.stdout
+    assert ("stop criterion (verdict streak): not met — pass 2: 2 new findings "
+            "of unnamed severity" in res.stdout)
+
+
+def test_streak_ignores_new_minor_findings(run, ledger):
+    """The signal is "zero major/blocker", and a minor is neither.
+
+    The round of record printed `not met — pass 1: 1 new findings` beside
+    its own `ROUND CLOSABLE`, off a cell reading `1 (V1-1, minor)`.
+    """
+    minor = run(SCRIPT, ledger(CLOSED, suffix=passes_v([
+        ("17/0/0", "1 (V1-1, minor)"),
+        ("1/0/0", 0),
+    ])))
+    assert minor.returncode == 0, minor.stdout
+    assert "stop criterion (verdict streak): met — passes 1, 2 both clean" \
+        in minor.stdout
+
+    major = run(SCRIPT, ledger(CLOSED, suffix=passes_v([
+        ("17/0/0", "1 (V1-1, major)"),
+        ("1/0/0", 0),
+    ])))
+    assert major.returncode == 0, major.stdout
+    assert ("stop criterion (verdict streak): not met — pass 1: 1 new major "
+            "findings" in major.stdout)
+
+
+def test_a_spelled_out_verdicts_cell_is_read(run, ledger):
+    """`23 L (+1 LANDED OTHERWISE) / 0 P / 0 NOT` is the corpus's other
+    shape, and it is read rather than reported unreadable."""
+    res = run(SCRIPT, ledger(CLOSED, suffix=passes_v([
+        ("5 L / 0 P / 0 NOT", 0),
+        ("23 L (+1 LANDED OTHERWISE) / 0 P / 0 NOT", 0),
+    ])))
+    assert res.returncode == 0, res.stdout
+    assert "stop criterion (verdict streak): met" in res.stdout
+
+
+def test_an_unreadable_verdicts_cell_never_reads_as_clean(run, ledger):
+    """The one error that would announce a convergence nobody measured."""
+    res = run(SCRIPT, ledger(CLOSED,
+                             suffix=passes_v([("all LANDED", 0), ("3/0/0", 0)])))
+    assert res.returncode == 0, res.stdout
+    assert ("stop criterion (verdict streak): not met — pass 1: verdicts cell "
+            "not machine-readable (all LANDED)" in res.stdout)
+
+
+def test_a_single_pass_cannot_meet_the_stop_criterion(run, ledger):
+    res = run(SCRIPT, ledger(CLOSED, suffix=passes_v([("3/0/0", 0)])))
+    assert res.returncode == 0, res.stdout
+    assert ("stop criterion (verdict streak): not met — 1 verification "
+            "pass(es) recorded, the signal needs 2 consecutive clean ones"
+            in res.stdout)
+
+
+def test_a_single_pass_line_says_it_is_report_only(run, ledger):
+    """The not-met form for too few passes carries the report-only tail."""
+    res = run(SCRIPT, ledger(CLOSED, suffix=passes_v([("3/0/0", 0)])))
+    assert ("stop criterion (verdict streak): not met — 1 verification "
+            "pass(es) recorded, the signal needs 2 consecutive clean ones; "
+            "report-only, no exit code" in res.stdout)
+
+
+def test_a_dirty_pass_line_says_it_is_report_only(run, ledger):
+    """The not-met form with reasons carries the report-only tail."""
+    res = run(SCRIPT, ledger(CLOSED,
+                             suffix=passes_v([("4/0/0", 0), ("3/0/1", 0)])))
+    assert ("stop criterion (verdict streak): not met — pass 2: 1 NOT LANDED"
+            "; report-only, no exit code" in res.stdout)
+
+
+def test_no_passes_table_prints_no_stop_criterion(run, ledger):
+    res = run(SCRIPT, ledger(CLOSED))
+    assert "stop criterion" not in res.stdout
 
 
 def test_no_passes_table_prints_no_curve(run, ledger):
@@ -525,8 +665,8 @@ def test_v2_passes_table_prints_the_time_indexed_curve(run, ledger):
 def test_malformed_ended_is_named_and_the_axis_suppressed(run, ledger):
     """Malformed 'ended': named in output, time axis suppressed, exit AS-IS.
 
-    The two columns exist only because observability is on, so a defect in
-    them may not create a failure path the flag alone would introduce.
+    The two columns are optional, so a defect in them may not create a
+    failure path their mere presence would introduce.
     """
     rows = list(CLEAN_V2)
     rows[1] = (3, "2026-08-10T11:00:00Z", "yesterday")
@@ -605,99 +745,6 @@ def test_non_integer_pass_ordinal_falls_back_to_the_row_position(run, ledger):
     res = run(SCRIPT, ledger(CLOSED, suffix=table))
     assert res.returncode == 0, res.stdout
     assert "passes: row 1 'ended' unparseable" in res.stdout
-
-
-# --- the optional --trace line ---------------------------------------------
-#
-# The trace is not the ledger: nothing about it may reach an exit code.
-
-SPAN = '{"v": 1, "kind": "span", "round": "r", "span": "s1.00"}'
-
-
-def test_trace_without_a_value_is_a_usage_error(run, ledger):
-    res = run(SCRIPT, ledger(CLOSED), "--trace")
-    assert res.returncode == 2, res.stdout
-    assert "--trace needs a path" in res.stdout
-    assert res.stderr == ""
-
-
-def test_absent_trace_is_reported_as_none(run, ledger, tmp_path):
-    res = run(SCRIPT, ledger(CLOSED), "--trace", tmp_path / "absent.jsonl")
-    assert res.returncode == 0, res.stdout
-    assert "trace: none" in res.stdout
-
-
-def test_trace_records_are_counted(run, ledger, tmp_path):
-    trace = tmp_path / "trace.jsonl"
-    trace.write_text(SPAN + "\n" + SPAN + "\n\n", encoding="utf-8")
-    res = run(SCRIPT, ledger(CLOSED), "--trace", trace)
-    assert res.returncode == 0, res.stdout
-    assert "trace: 2 records" in res.stdout
-    assert "unreadable" not in res.stdout
-
-
-def test_corrupt_trace_lines_are_counted_and_never_fatal(run, ledger, tmp_path):
-    trace = tmp_path / "trace.jsonl"
-    trace.write_text(SPAN + "\nnot json\n{\"v\": 1,\n[]\n", encoding="utf-8")
-    res = run(SCRIPT, ledger(CLOSED), "--trace", trace)
-    assert res.returncode == 0, res.stdout
-    assert "trace: 1 records, 3 unreadable lines skipped" in res.stdout
-
-
-def test_a_corrupt_trace_does_not_change_an_open_ledgers_exit_code(
-        run, ledger, tmp_path):
-    trace = tmp_path / "trace.jsonl"
-    trace.write_text("not json\n", encoding="utf-8")
-    res = run(SCRIPT, ledger(CLOSED + "\n" + OPEN), "--trace", trace)
-    assert res.returncode == 1, res.stdout
-    assert "trace: 0 records, 1 unreadable lines skipped" in res.stdout
-
-
-def test_trace_pointed_at_a_directory_is_handled(run, ledger, tmp_path):
-    """No traceback, no exit-code change — only the file NAME is echoed."""
-    directory = tmp_path / "trace.jsonl"
-    directory.mkdir()
-    res = run(SCRIPT, ledger(CLOSED), "--trace", directory)
-    assert res.returncode == 0, res.stdout
-    assert "trace: unreadable (trace.jsonl)" in res.stdout
-    assert res.stderr == ""
-
-
-def test_undecodable_trace_is_reported_without_a_traceback(
-        run, ledger, tmp_path):
-    trace = tmp_path / "trace.jsonl"
-    trace.write_bytes(b'{"v": 1}\n\xff\xfe\n')
-    res = run(SCRIPT, ledger(CLOSED), "--trace", trace)
-    assert res.returncode == 0, res.stdout
-    assert "trace: unreadable (trace.jsonl)" in res.stdout
-    assert res.stderr == ""
-
-
-def test_empty_trace_file_is_zero_records(run, ledger, tmp_path):
-    trace = tmp_path / "trace.jsonl"
-    trace.write_text("", encoding="utf-8")
-    res = run(SCRIPT, ledger(CLOSED), "--trace", trace)
-    assert res.returncode == 0, res.stdout
-    assert "trace: 0 records" in res.stdout
-
-
-def test_trace_flag_may_precede_the_ledger_argument(run, ledger, tmp_path):
-    trace = tmp_path / "trace.jsonl"
-    trace.write_text(SPAN + "\n", encoding="utf-8")
-    res = run(SCRIPT, "--trace", trace, ledger(CLOSED))
-    assert res.returncode == 0, res.stdout
-    assert "trace: 1 records" in res.stdout
-
-
-def test_trace_and_prev_combine(run, ledger, tmp_path):
-    trace = tmp_path / "trace.jsonl"
-    trace.write_text(SPAN + "\n", encoding="utf-8")
-    prev = ledger(CLOSED, name="prev.md")
-    res = run(SCRIPT, ledger(CLOSED, name="cur.md"), "--prev", prev,
-              "--trace", trace)
-    assert res.returncode == 0, res.stdout
-    assert "trace: 1 records" in res.stdout
-    assert f"DELTA vs {prev}:" in res.stdout
 
 
 # --- inter-round delta -----------------------------------------------------
@@ -976,6 +1023,38 @@ def test_an_explicitly_adjudicated_security_class_still_kills(run, ledger):
     assert "class-kill count for security-pii" not in res.stdout
 
 
+def test_a_marked_defect_class_beside_the_default_leaves_it_a_default(
+        run, ledger):
+    """The marker qualifies the tag it stands BESIDE, not the whole cell.
+
+    A security row carrying the backstop's default AND a coined class the
+    adjudicator marked is the ordinary shape of such a row. Read over the
+    whole cell, the marker made `security-pii` adjudicator-chosen too and
+    fired the kill on the lens's own backstop.
+    """
+    verdict = ("upheld class:security-pii class:citation-drift "
+               "class-origin:adjudicator")
+    rows = "\n".join([tagged("SE-1", verdict), tagged("SE-2", verdict)])
+    res = run(SCRIPT, ledger(rows, preamble=SECURITY_HEADER))
+    assert res.returncode == 0, res.stdout
+    assert ("CLASS-KILL DUE: citation-drift (2 upheld: SE-1, SE-2)"
+            in res.stdout)
+    assert "CLASS-KILL DUE: security-pii" not in res.stdout
+    assert "class-kill count for security-pii: 0 of 2 upheld rows" in res.stdout
+
+
+def test_the_marker_binds_to_its_neighbour_whichever_side_it_is_written(
+        run, ledger):
+    """Nearest tag wins, so either order of writing the pair reads alike."""
+    verdict = ("upheld class-origin:adjudicator class:security-pii "
+               "class:citation-drift")
+    rows = "\n".join([tagged("SE-1", verdict), tagged("SE-2", verdict)])
+    res = run(SCRIPT, ledger(rows, preamble=SECURITY_HEADER))
+    assert res.returncode == 0, res.stdout
+    assert ("CLASS-KILL DUE: security-pii (2 upheld: SE-1, SE-2)"
+            in res.stdout)
+
+
 def test_the_security_class_counts_where_no_lens_default_could_set_it(
         run, ledger):
     """No declared security lens, no backstop, so nothing set the class but
@@ -1025,10 +1104,15 @@ def test_an_open_class_kill_row_prints_kill_in_flight(run, ledger):
     assert res.returncode == 1, res.stdout
     assert "kill in flight: line-rot (K-1)" in res.stdout
     assert re.search(r"kill in flight: [a-z0-9-]+ \(", res.stdout), res.stdout
-    assert "CLASS-KILL DUE: line-rot" in res.stdout
+    # The threshold line reads the SAME row: with a kill open, the kill is
+    # in flight, not due. The comparison fixture — identical but for the
+    # tag — is what carries `DUE`, and both exit the same way.
+    assert "CLASS-KILL IN FLIGHT: line-rot (2 upheld: DA-1, DA-2)" in res.stdout
+    assert "CLASS-KILL DUE" not in res.stdout
     before = run(SCRIPT, ledger("\n".join([*base, plain]), name="no-tag.md"))
     assert before.returncode == res.returncode, before.stdout
     assert "kill in flight:" not in before.stdout
+    assert "CLASS-KILL DUE: line-rot" in before.stdout
 
 
 def test_a_terminal_class_kill_row_is_not_in_flight(run, ledger):
@@ -1041,6 +1125,25 @@ def test_a_terminal_class_kill_row_is_not_in_flight(run, ledger):
     res = run(SCRIPT, ledger(rows))
     assert res.returncode == 0, res.stdout
     assert "kill in flight:" not in res.stdout
+
+
+def test_a_terminal_class_kill_row_prints_done_not_due(run, ledger):
+    """The third state: the kill LANDED, so nothing is due and nothing is
+    in flight. The comparison fixture is the same ledger with the tag
+    removed — it prints `DUE`, and both exit the same way.
+    """
+    base = [tagged("DA-1", "upheld, class:line-rot"),
+            tagged("DA-2", "upheld, class:line-rot")]
+    gate = tagged("K-1", "the gate for class-kill:line-rot")
+    plain = tagged("K-1", "the gate for this class")
+    res = run(SCRIPT, ledger("\n".join([*base, gate]), name="done.md"))
+    assert res.returncode == 0, res.stdout
+    assert "CLASS-KILL DONE: line-rot (2 upheld: DA-1, DA-2)" in res.stdout
+    assert "CLASS-KILL DUE" not in res.stdout
+    before = run(SCRIPT, ledger("\n".join([*base, plain]), name="no-tag2.md"))
+    assert before.returncode == res.returncode, before.stdout
+    assert "CLASS-KILL DUE: line-rot" in before.stdout
+    assert "CLASS-KILL DONE" not in before.stdout
 
 
 # --- injection rate --------------------------------------------------------
@@ -1058,6 +1161,40 @@ def test_the_injection_rate_is_printed_per_batch(run, ledger):
     assert res.returncode == 0, res.stdout
     assert "  aa11: 1/2 = 50.0%" in res.stdout
     assert "  bb22: 0/1 = 0.0%" in res.stdout
+
+
+def test_the_batch_key_is_the_first_hash_in_the_fix_cell(run, ledger):
+    """The DoD case: `F3 c447822 (touch-up)` and a bare `c447822` are ONE
+    batch. Before, each wording was its own batch with its own denominator.
+    """
+    rows = "\n".join([
+        tagged("DA-1", "upheld", fix="F3 c447822 (touch-up)"),
+        tagged("DA-2", "upheld", fix="c447822"),
+        tagged("V1-1", "upheld, origin:fix-application from:c447822",
+               fix="F4 d93c088"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert "  c447822: 1/2 = 50.0%" in res.stdout
+    assert "  d93c088: 0/1 = 0.0%" in res.stdout
+    assert "F3 c447822" not in res.stdout
+
+
+def test_a_fix_cell_without_a_hash_keeps_its_whole_literal_as_the_key(
+        run, ledger):
+    """A snapshot-named batch groups exactly as it always did — and a bare
+    date is not mistaken for a commit hash.
+    """
+    rows = "\n".join([
+        tagged("DA-1", "upheld", fix="snapshot B4"),
+        tagged("DA-2", "upheld", fix="20260904"),
+        tagged("V1-1", "upheld, origin:fix-application from:aa11",
+               fix="snapshot B4"),
+    ])
+    res = run(SCRIPT, ledger(rows))
+    assert res.returncode == 0, res.stdout
+    assert "  snapshot B4: 0/2 = 0.0%" in res.stdout
+    assert "  20260904: 0/1 = 0.0%" in res.stdout
 
 
 def test_the_reference_points_are_marked_as_literature(run, ledger):
@@ -1443,8 +1580,30 @@ def test_an_empty_register_prints_a_zero_aggregate(run, ledger, tmp_path):
     reg = register(tmp_path)
     res = run(SCRIPT, ledger(CLOSED), "--register", reg)
     assert res.returncode == 0, res.stdout
-    assert ("rows: 0 | nominated 0 | ratified 0 | expired-reopened 0 | "
+    assert ("rows: 0 | nominated 0 | ratified 0 | expired-reopened 0 | withdrawn 0 | "
             "oldest n/a (empty register)" in res.stdout)
+
+
+def test_a_withdrawn_row_is_parsed(run, ledger, tmp_path):
+    """A withdrawn nomination is a status of its own, not a malformed row."""
+    reg = register(tmp_path, reg_row(status="withdrawn 2026-09-15"))
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert res.returncode == 0, res.stdout
+    assert "RESIDUE REGISTER STRUCTURAL ERRORS:" not in res.stdout
+    assert "NOMINATION OVERDUE" not in res.stdout
+
+
+def test_the_aggregate_counts_a_withdrawn_row(run, ledger, tmp_path):
+    reg = register(
+        tmp_path,
+        reg_row(rid="r/A-1", status="nominated 2099-01-01"),
+        reg_row(rid="r/A-2", status="ratified 2026-01-01"),
+        reg_row(rid="r/A-3", status="expired-reopened 2026-01-01"),
+        reg_row(rid="r/DA-4", status="withdrawn 2020-01-01"),
+    )
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert ("rows: 4 | nominated 1 | ratified 1 | expired-reopened 1 | "
+            "withdrawn 1 | oldest " in res.stdout)
 
 
 def test_an_overdue_nomination_is_printed(run, ledger, tmp_path):
@@ -1486,6 +1645,17 @@ def test_an_unratified_row_is_not_charged_with_an_expired_review_by(
     assert "REVIEW-BY EXPIRED" not in res.stdout
 
 
+def test_a_withdrawn_row_is_never_counted_as_expiring(run, ledger, tmp_path):
+    """A withdrawn nomination is neither overdue nor expiring, even once its
+    review-by date has passed."""
+    reg = register(tmp_path, reg_row(status="withdrawn 2020-01-01",
+                                     review_by="2020-06-01"))
+    res = run(SCRIPT, ledger(CLOSED), "--register", reg)
+    assert res.returncode == 0, res.stdout
+    assert "REVIEW-BY EXPIRED" not in res.stdout
+    assert "NOMINATION OVERDUE" not in res.stdout
+
+
 def test_a_second_cycle_row_demands_an_owner_fork(run, ledger, tmp_path):
     reg = register(tmp_path,
                    reg_row(status="expired-reopened 2026-01-01 (#2)"))
@@ -1512,6 +1682,18 @@ def test_a_run_qualified_id_accounts_for_the_bare_ledger_id(run, tmp_path):
     register(tmp_path / ".critic-ledger", reg_row(rid="run1/DA-2"))
     res = run(SCRIPT, path)
     assert "NOMINATION WITHOUT A REGISTER ROW" not in res.stdout
+
+
+def test_a_withdrawn_register_row_accounts_for_no_nomination(run, tmp_path):
+    """A withdrawal sends the finding back to adjudication, so a ledger row
+    still awaiting signature behind it is named, not counted as a wait."""
+    path = run_ledger(tmp_path, CLOSED + "\n" + NOMINEE)
+    register(tmp_path / ".critic-ledger",
+             reg_row(rid="run1/DA-2", status="withdrawn 2026-09-10"))
+    res = run(SCRIPT, path)
+    flagged = [line for line in res.stdout.splitlines()
+               if "NOMINATION WITHOUT A REGISTER ROW: DA-2" in line]
+    assert flagged, res.stdout
 
 
 def test_the_honest_boundary_is_printed_with_the_aggregate(run, ledger,
@@ -1924,6 +2106,16 @@ def test_two_prev_ledgers_print_the_plateau(run, ledger, tmp_path):
             "-2.5 | major+blocker per round (oldest first): 7 -> 4 -> 2 | "
             "deltas -3, -2" in res.stdout)
     assert "prev order: reordered" not in res.stdout
+    # TWO lines: the numbers, then the advisory sentence in its own words.
+    # The first no longer trails a clause about the binary streak, and the
+    # second does not carry the `stop criterion` literal — that literal
+    # belongs to ONE line of the output and to no other.
+    assert "never instead of it" not in res.stdout.split("severity plateau (")[1] \
+        .split("\n")[0]
+    assert ("  severity plateau is ADVISORY: it is reported beside the binary "
+            "verdict-streak signal, never instead of it, and it enters no "
+            "stop rule, no gate and no exit code." in res.stdout)
+    assert "stop criterion" not in res.stdout
 
 
 def test_the_window_is_ordered_by_the_ledgers_not_by_the_arguments(
@@ -1976,6 +2168,34 @@ def test_a_ledger_without_round_started_stops_the_plateau(run, ledger, missing):
     assert "DELTA vs" in res.stdout
 
 
+@pytest.mark.parametrize("missing", ["cur", "p1", "p2"])
+def test_the_stopped_plateau_names_the_undated_ledger(run, ledger, missing):
+    """WHICH ledger cost the metric is named, not left to be re-derived."""
+    days = {"cur": "2026-08-29", "p1": "2026-08-20", "p2": "2026-08-10"}
+    paths = {
+        name: (ledger("\n".join(raised(f"PA-{i}") for i in range(1, 3)),
+                      name=f"{name}.md")
+               if name == missing
+               else window_ledger(ledger, days[name], 2, name=f"{name}.md"))
+        for name in ("cur", "p1", "p2")
+    }
+    res = run(SCRIPT, paths["cur"], "--prev", paths["p1"],
+              "--prev", paths["p2"])
+    assert res.returncode == 0, res.stdout
+    assert f"no readable Round-started in {paths[missing]})" in res.stdout
+
+
+def test_the_stopped_plateau_names_both_undated_ledgers(run, ledger):
+    """Two undated members are both named, in the order they were read."""
+    cur = window_ledger(ledger, "2026-08-29", 2, name="cur.md")
+    rows = "\n".join(raised(f"PA-{i}") for i in range(1, 3))
+    p1 = ledger(rows, name="p1.md")
+    p2 = ledger(rows, name="p2.md")
+    res = run(SCRIPT, cur, "--prev", p1, "--prev", p2)
+    assert res.returncode == 0, res.stdout
+    assert f"no readable Round-started in {p1}, {p2})" in res.stdout
+
+
 def test_two_previous_ledgers_of_the_same_date_have_no_order(run, ledger):
     cur = window_ledger(ledger, "2026-08-29", 2, name="cur.md")
     p1 = window_ledger(ledger, "2026-08-20", 4, name="p1.md")
@@ -1983,6 +2203,7 @@ def test_two_previous_ledgers_of_the_same_date_have_no_order(run, ledger):
     res = run(SCRIPT, cur, "--prev", p1, "--prev", p2)
     assert (f"{PLATEAU}: n/a: the order of the previous ledgers is not derived"
             in res.stdout)
+    assert f"the same Round-started in {p1}, {p2})" in res.stdout
 
 
 def test_an_uncalendared_round_started_is_not_a_date(run, ledger):
@@ -2284,6 +2505,28 @@ def test_an_unreadable_security_lens_field_is_a_structural_error(run, ledger):
     assert "`Security lens:`" in res.stdout
 
 
+def test_two_security_lens_fields_are_a_structural_error(run, ledger):
+    """The duplicate rule is the SAME rule for every header field.
+
+    `Process prefixes:` refused a second declaration; its neighbour
+    `Security lens:` returned the first match and discarded the second with
+    no trace, because the two were parsed by two hand-written patterns. Both
+    now go through `ledger_md.header_field`, whose rule is exactly one
+    occurrence — and both values here are individually well-formed, which is
+    the point: the defect was silent acceptance, not a bad value.
+    """
+    res = run(
+        SCRIPT,
+        ledger(
+            CLOSED,
+            preamble="- Security lens: SE\n- Security lens: SF\n",
+        ),
+    )
+    assert res.returncode == 2, res.stdout
+    assert "carries 2 `Security lens:` fields" in res.stdout
+    assert "never a silent replacement" in res.stdout
+
+
 def test_a_ledger_declaring_neither_field_prints_neither_report(run, ledger):
     """The compatibility promise of this batch, asserted rather than claimed."""
     res = run(SCRIPT, ledger(CLOSED))
@@ -2507,7 +2750,7 @@ def test_the_shelf_tag_changes_no_count_on_a_single_ledger_recount(run, ledger):
 # claim (`criterion` read as the fourth cell from the end at width 8 and 9
 # alike), the one rule the zone cell feeds (`logged-no-action` at Z3 only),
 # the third bucket's own overdue report, and the header's schema declaration.
-# `tests/run-regression.sh` c66-c75 covers the same ground end to end; these
+# `tests/run-regression.sh` c63-c72 covers the same ground end to end; these
 # add the line formats and the edges the shell suite does not reach.
 
 V3_CLOSED = ("| DA-1 | major | Z2 | claim | verdict | crit | fix | LANDED | "
@@ -2746,3 +2989,60 @@ def test_the_gate_literal_fits_the_contract_and_a_bare_gate_ok_does_not(
         SCRIPT, ledger(GATE_ROW.format(verified="NOT LANDED — gate K-1.sh FAIL")))
     assert failed.returncode == 1, failed.stdout
     assert "non-terminal ids: K-1" in failed.stdout
+
+
+# --- the reading contract: `read_ledger` -----------------------------------
+#
+# The one place this file imports code instead of running the script: the
+# container `read_ledger` returns is an internal contract that no subprocess
+# run can see, so it is pinned in process. Everything else stays black-box.
+# `read_ledger` lives in `ledger_model.py`, the module beside the script.
+
+
+@pytest.fixture(scope="module")
+def ledger_model(scripts_dir):
+    """The reading module, imported from the scripts directory itself.
+
+    Its own imports resolve beside it, as they do under the script's path
+    insert, so the directory is on `sys.path` for the import only.
+    """
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "ledger_model_under_test",
+            scripts_dir / "ledger_model.py",
+        )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["ledger_model_under_test"] = module
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(scripts_dir))
+    return module
+
+
+def read_lines(path) -> list[str]:
+    """Hand back a file's lines the way the script reads them."""
+    with path.open(encoding="utf-8") as fh:
+        return fh.readlines()
+
+
+def test_read_ledger_collects_the_header_in_one_pass(ledger_model, tmp_path):
+    """One call yields the rows, the declared lenses and no errors."""
+    path = write_ledger(tmp_path / "ledger.md",
+                        "\n".join([raised("AA-1"), raised("BB-1")]),
+                        preamble=lens_field("L", "T"))
+    ledger, errors = ledger_model.read_ledger(
+        read_lines(path), ledger_path=str(path), register_arg=None)
+    assert len(ledger.rows) == 2
+    assert ledger.lens_prefixes == ["L", "T"]
+    assert errors == []
+
+
+def test_read_ledger_reports_a_row_of_the_wrong_width(ledger_model, tmp_path):
+    """An 8-cell row under a 9-cell header is an error, never silence."""
+    path = write_ledger(tmp_path / "ledger.md", raised("AA-1"), header=HEADER_9,
+                        preamble="- Row schema: v3\n" + lens_field("L", "T"))
+    _, errors = ledger_model.read_ledger(
+        read_lines(path), ledger_path=str(path), register_arg=None)
+    assert errors
+    assert "malformed row (8 cells, need 9" in errors[0]

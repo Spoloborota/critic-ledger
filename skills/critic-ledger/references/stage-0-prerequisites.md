@@ -50,9 +50,9 @@ decided here is checked at stage 2, executed at stage 6 and stage 9, and
 put in front of every critic at stage 3.
 **The subagent-model environment is READ here, not assumed.** Before the
 FIRST spawn the orchestrator reads `CLAUDE_CODE_SUBAGENT_MODEL`
-(`echo $CLAUDE_CODE_SUBAGENT_MODEL` — an ordinary environment read, not
-a platform extension) and records the answer in the ledger header's
-existing `- Prerequisite (stage 0):` line as `subagent-model: set
+(`printf '%s' "$CLAUDE_CODE_SUBAGENT_MODEL"` — an ordinary environment
+read, not a platform extension) and records the answer in the ledger
+header's existing `- Prerequisite (stage 0):` line as `subagent-model: set
 <value>` or `subagent-model: unset`. The value itself is written only
 when it passes an anchored model-name shape check — latin letters,
 digits, hyphen and dot, 64 characters at most; anything else is recorded
@@ -62,9 +62,9 @@ and no stop condition is created by it. What it makes visible is the
 collapse the router warns about — a variable that stands above the spawn
 call silently flattens the per-role allocation, so the header must show
 the models that ACTUALLY applied.
-**With observability on**, read the flag HERE and fix the value of the
-ledger's `- Observability:` header line — no span is written at this
-stage and none is possible, since neither the run folder nor the ledger
-exists yet, so that line, exactly like the prerequisite line itself, is
-materialized into the ledger at stage 1(c).
+After a refresh of the installed copy the consumer project's own
+carried-over notes — a companion checklist, a contract skeleton, script
+addresses — are re-derived against the copy before stage 1: nothing in the
+skill re-derives them for it.
+
 Output: a prerequisite line in the ledger header.

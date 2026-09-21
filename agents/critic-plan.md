@@ -65,6 +65,15 @@ file wins and you say so in your report.
 - **Every negative factual claim carries its command and that command's
   output.** "Not found", "absent", "never defined" without an attached
   command+output is "not checked", not "absent".
+- **A claim the object makes about a script's or git's behavior is
+  re-derived, never accepted from the object's own prose.** Read the code
+  the claim cites, or run the check yourself where running it is read-only
+  and touches nothing outside the object you were handed. In `plan` mode
+  there is no executor to hand a command to, so a claim you can neither
+  read out of code nor run read-only is filed as an UNVERIFIED hypothesis
+  — the literal `UNVERIFIED` opening its claim, as your spawn prompt's
+  output section defines — never upheld on the prose alone, and never
+  dropped in silence.
 - **Never write your report to a file.** The orchestrator salvages it; salvage
   is subject to the project's leak/PII discipline and is not your call.
 

@@ -71,7 +71,7 @@ to the owner instead.
 ## Comparing two rounds
 
 ```text
-python3 ../../skills/critic-ledger/templates/recount.py fix-ledger.md --prev <previous-round>/fix-ledger.md
+python3 ../../skills/critic-ledger/scripts/recount.py fix-ledger.md --prev <previous-round>/fix-ledger.md
 DELTA vs <previous-round>/fix-ledger.md: newly-terminal ['EA-1'] | regressed [] | still-open [] | new-open ['EB-2']
 ```
 
@@ -87,7 +87,7 @@ row deliberately extends the ledger's sanitized `DC-1` thread.
 ## One more thing the recount reads
 
 ```text
-python3 ../../skills/critic-ledger/templates/recount.py fix-ledger.md --register residue-register.md
+python3 ../../skills/critic-ledger/scripts/recount.py fix-ledger.md --register residue-register.md
 ```
 
 Given the register it prints an aggregate over the project's accepted risk —

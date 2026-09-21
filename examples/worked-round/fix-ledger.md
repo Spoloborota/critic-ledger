@@ -28,7 +28,9 @@
   under "Closure" below. `closed` blocks nothing: it carries no freeze, so this
   ledger still recounts exactly as it did while open.)
 - Object: full path `<repo>/skills/critic-ledger/SKILL.md` plus
-  `<repo>/skills/critic-ledger/templates/` (11 files) | short name:
+  `<repo>/skills/critic-ledger/templates/` (11 files; the nine scripts now
+  live under `<repo>/skills/critic-ledger/scripts/`, the two skeletons stay
+  under `templates/`) | short name:
   skill-payload — the short name is only the run-folder address, the full path
   lives here. Pin: `3f2a91c` (illustrative placeholder). Pin = state at round
   start; verification always runs against the CURRENT head.
@@ -65,8 +67,6 @@
   object is far over the 400-line gate, so the round could not open without it.
 - Contract amendments: none.
 - Round-started: 2026-08-09T09:00:00Z.
-- Observability: off.
-- Trace: none (observability off).
 - Load-bearing claims of the object (why this many lenses): (1) the staged
   procedure is executable as written by someone who has never run it; (2) the
   row schema, the closure script and the templates agree with one another;
@@ -99,7 +99,7 @@
 - Exit family: residual-risk — the round closed over one ratified residue row,
   not on a streak of clean passes alone. Both exits are legitimate closures.
 - Closure rule: the round closes only on a programmatic recount
-  (`templates/recount.py`) reporting zero non-terminal rows. A row's status
+  (`scripts/recount.py`) reporting zero non-terminal rows. A row's status
   lives ONLY in its cells; prose never overrides the table. Range rows are
   banned — one id per row. Every row is exactly 9 cells wide, the width of the
   v3 schema this ledger declares (`zone` inserted third); a literal pipe inside
@@ -144,7 +144,7 @@
 | 2 | CLOSING pass by a fifth fresh verifier: HV-1 plus a re-check of a sample of earlier ids | 1/0/0 | 1 (HW-1, minor) | yes | n/a | convergence signal met — passes 1 and 2 both zero-major, zero NOT LANDED. Not narrowed to the residue: no owner signature for a residue-scoped second pass exists in this ledger, and without it the pass is run in full | 1 |
 | 3 | post-convergence micro-batch: HW-1 alone, checked mechanically by grep | 1/0/0 | 0 | yes | n/a | the curve closes at 0 | 1 |
 
-New-findings curve by pass: computed by `templates/recount.py` from the table
+New-findings curve by pass: computed by `scripts/recount.py` from the table
 above — quoted in the closure block below, never hand-counted. Convergence
 signal = two consecutive passes with 0 major and 0 NOT LANDED. Kill criterion:
 no decay for three consecutive passes → stop and fork to the owner.
@@ -195,7 +195,7 @@ Round closed 2026-08-09 on a programmatic recount — every row terminal, no row
 awaiting a signature, and no row waiting on the owner's Z3 closing act. Only
 then was `Ledger state:` moved from `open` to `closed 2026-08-09` in the header
 above: the field records the closure, it does not decide it. Verbatim output of
-`python3 ../../skills/critic-ledger/templates/recount.py fix-ledger.md`:
+`python3 ../../skills/critic-ledger/scripts/recount.py fix-ledger.md`:
 
 ```text
 rows: 12 | terminal: 12 | non-terminal: 0

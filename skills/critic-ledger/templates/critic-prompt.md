@@ -7,13 +7,17 @@ THE OBJECT PATH POINTS INTO A COPY. {object} is a path inside a scratchpad
 clone of the project, not the working tree. Review the copy exactly as
 given — do not "correct" the path to the real project, and cite file:line
 against the paths you were given (the orchestrator maps them back).
+Cite by an IMMUTABLE anchor where the object has one — a section number
+`x.y`, an id — and by file:line plus a verbatim quote otherwise: a line
+number alone rots under the round's own edits.
 
 MODE-CONDITIONAL EXECUTION RULE: in `plan` mode you run read-only
 commands (greps, counts, read-only git) yourself — they are required for
 factual claims. In `impl` mode you NEVER execute the object or its tests
 yourself, not even nominally read-only runs: you FORMULATE the exact
 commands and expected observations, and the orchestrator (or a separate
-agent) executes them on a scratchpad copy and returns the output to you.
+agent) executes them on a scratchpad copy; the output is not sent to you — it
+is kept and attached to your finding for adjudication, which is made on it.
 
 HARD CONSTRAINTS:
 - Strictly READ-ONLY. Never edit or write any file. Never run any
@@ -59,6 +63,10 @@ FINDING FORMAT (mandatory for acceptance):
   cause irreversible harm; major = a fact/contract distortion that
   manifests in a realistic usage scenario; minor = a local defect with no
   influence on decisions.
+- The severity word is ONE OF THESE THREE LITERALS and nothing else — a
+  qualifier, a parenthetical or a synonym beside it is not the literal, and
+  the mechanical layout script skips such a header line instead of
+  transcribing it.
 - Evidence for EVERY finding: file:line and/or an exact quote.
 - Every NEGATIVE factual claim ("not found", "absent", "never defined")
   must carry the exact command you ran AND its output; without them the
@@ -74,3 +82,18 @@ numbered findings, a coverage statement (what you examined vs skipped).
 In `impl` mode add, before the coverage statement, a clearly separated
 block COMMANDS FOR THE ORCHESTRATOR TO EXECUTE — each command with the
 observation that would confirm or kill the finding it belongs to.
+Write every command so it runs under a POSIX shell without relying on
+word-splitting of unquoted variables; quote every argument. One command per
+Bash call — the commands you hand over and the read-only commands you run
+yourself in `plan` mode alike: never join two checks with `&&` or `;`, since
+a chain stops at the first non-zero exit — a legitimate zero-match
+`grep -c` among them — and every check after it silently does not run at
+all. Every command
+touches nothing outside the scratch copy it is run on — no state-changing
+git, no network, no write to the repository or to any other path; a command
+that would need more is not run. A finding that depends on a run you did not
+perform is filed as an UNVERIFIED hypothesis: the literal `UNVERIFIED` opens
+its claim, right after `<id> | <severity> |` and never before the id, and the
+exact command whose output confirms or kills it goes into the finding's block
+below the header line, never onto the header line; it is transcribed like any finding and adjudicated on that output,
+never on your reading.

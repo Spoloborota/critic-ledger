@@ -9,12 +9,13 @@ observed, what is honestly unproven, and which defect forced which rule. The
 > observations the rules below were derived from — what was seen while the
 > discipline was being built, on the author's own documents, under the
 > PREVIOUS actor allocation (fixes applied by the judging session, not by a
-> separate fixer subagent). n = 2 on the counted pair, one object class,
-> self-reported counters with no external arbiter. They are recorded so each
-> rule can be traced to the defect that forced it, not offered as a measure
-> of how well the shipped discipline works. No external benchmark of it
-> exists; the README quotes no figures, and collecting that evidence is
-> planned rather than done.
+> separate fixer subagent). n = 2 on the counted pair, both normative
+> documents (code has since passed through impl rounds, with no control arm
+> there — section 4), self-reported counters with no external arbiter. They
+> are recorded so each rule can be traced to the defect that forced it, not
+> offered as a measure of how well the shipped discipline works. No external
+> benchmark of it exists; the README quotes no figures, and collecting that
+> evidence is planned rather than done.
 
 All measurements below are **self-reported counters from the author's private
 research — confidence grade C** (the scale: A — an external controlled study;
@@ -128,10 +129,14 @@ Keeping these two columns apart is the point. The five closed rounds, all grade 
   own authors as a lower bound.
 - Decaying defect curves on the five closed rounds (the list above).
 - Fix-loss 1→0 after the deleted-line mandate: the single occurrence predates
-  the mandate, none after it across roughly 129 deleted lines.
+  the mandate, none after it across ~130 deleted lines (the source's count;
+  the previously published 129 is not traced to it).
 - Micro-batch economics of ×2.7–8.5 relative to the full verification mandate.
-- Critic accuracy around 99.4% — one refuted finding out of 165 — while the
-  discipline bites the critics too: verifiers found errors in their own reports.
+- Critic accuracy around 99.4% on the first counted pair — one refuted finding
+  out of 165 — **not confirmed on newer data: 91.3 % by lens over seven rounds
+  (raised 184, upheld 168; see the provenance note at the top of this file)**
+  — while the discipline bites the critics too: verifiers found errors in
+  their own reports.
 
 **The one figure here that is not self-reported.** A review run by a fresh
 session scores F1 **28.6%** against **24.6%** for a review run inside the
@@ -146,11 +151,10 @@ fresh verifier" rests on it.
 
 ### Not shown — and flagged as unproven in the primary sources themselves:
 
-- **n = 2, and both points are the same object class.** The counted pair is the
+- **n = 2, and both points are normative documents.** The counted pair is the
   first live run (a meta-plan) and the dogfood round (this plugin's skill
-  document and templates): the second widened n but not the class, both being
-  normative documents. Folding in the list's later rounds would raise n and
-  leave the class exactly where it is — and the class is the caveat.
+  document and templates). Code has since passed through impl rounds, but
+  without a control arm — the counted pair stays two normative documents.
 - **Verifiers are of the same model family as the critics and the fixer.**
   Self-preference — judges scoring their own family higher — is documented,
   grade A: Panickssery et al., *LLM Evaluators Recognize and Favor Their Own
@@ -161,8 +165,9 @@ fresh verifier" rests on it.
 - **The cost of verifier freshness is unmeasured here — the effect is not.** The
   F1 result above is external research, and the skill states freshness as a
   MEASURED rule for every pass, the closing one included. Unmeasured is the
-  price: the live run's closing was still done by continuations, so what a fresh
-  verifier per pass costs in tokens and time is unknown here.
+  price: the live run's closing was still done by continuations, so the PREMIUM
+  of freshness over a continued verifier is unknown here, and the absolute
+  per-pass cost is not a claim of this file either.
 - **Residual dogfood circularity.** An independent trace audit — a fresh agent
   *without* the skill, reading the ledger, the reports and the commits against
   the skill's contract — reduces the self-checking but cannot remove it: whether
@@ -205,7 +210,7 @@ targeted insertions, never by rewriting its own text — rewrites lose content.
 
 1. **The verifier walks every DELETED line of each fix batch's diff.** Forced by
    a batch that removed a neighbouring normative block along with the line it
-   was editing; after the mandate, fix-loss went 1→0 across ~129 deleted lines.
+   was editing; after the mandate, fix-loss went 1→0 across ~130 deleted lines.
 2. **Critic reports are salvaged verbatim immediately, and again after every
    append, inside the same batch.** Forced by a recurring durable-storage
    blocker: a single-shot salvage loses whatever the agent appends later.

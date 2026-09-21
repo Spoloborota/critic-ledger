@@ -24,6 +24,32 @@ Rules of use:
   DIFFERS before and after the fix? → level 1; (2) is "fixed" expressible
   as the presence or absence of a concrete string in the object? → level 2;
   (3) otherwise a before/after quote pair plus one sentence of reasoning.
+- **A level-1 command that MUTATES what it runs against has two forms.**
+  Against a scratch COPY of the object —
+  never the repository — the verifier runs it itself: a mutation-tested
+  guard, a renamed placeholder, a fixture rewritten in the copy. That copy
+  is made for the run by the ORCHESTRATOR, with `scripts/copy-project.sh`,
+  at `<scratchpad root>/critic-copies/<object-slug>/<copy-id>` with
+  `--run-id <copy-id>` — the orchestrator creating the parent of that path
+  first, because the script refuses a `--dest` whose parent does not exist
+  and creates only the last segment — and handed to the verifier by path;
+  the reverted state is proven by the copy being DISCARDED, not by an
+  undo: the orchestrator removes it after the run with
+  `scripts/cleanup-scratchpad.py --root <scratchpad root> --manifest <that copy's manifest> --confirm`,
+  after the same call without `--confirm` has printed the plan — without
+  it the script deletes nothing — and the closing call of stage 9 removes
+  any such copy still standing. Against the LIVE object it is run by an
+  executor spawned for that command, at the moment 7.18 fixes — one
+  executor at a time against any one tree, never beside the fixer or
+  another executor on it, and a verification pass of stage 8 never runs it
+  again; the verifier judges from that executor's printed output, and the
+  `verified` cell names which half the verifier ran live and which it
+  judged from the executor's output. The command leaves the live object as
+  it found it, and the reverted state is proven by the snapshot of the
+  tree 7.18 defines, taken by the orchestrator before the command runs
+  and again after the executor returns, the two printing the same bytes —
+  not by the executor's word; the batch is never committed over a
+  difference, and 7.18 names what the orchestrator does on one.
 - **When in doubt, take the LOWER level, never the higher one.** An honest
   weak criterion beats a strong one nobody can satisfy: an unsatisfiable
   criterion turns into an argument at verification, a weak one merely into
@@ -51,19 +77,30 @@ Rules of use:
 - A criterion the fixer could satisfy by editing the very file that defines
   the check (the test, the scoring script, the rubric) is INVALID — the
   check and the checked never sit in one pair of hands.
+- **A criterion never pins an absolute line number** where the object can
+  grow between batches. A later batch that lengthens the file above the
+  range moves the place, and the criterion then reads a section that
+  cannot show the fix however correct the fix is — a defect of the
+  ROUND's paper, not of the object. The anchor is CONTENT: a heading, a
+  row shape, a literal the region itself carries, selected by `awk` or
+  `sed` keyed on it. One already frozen that way is redesigned by the
+  re-adjudication route, its `verified` cell reset and the row re-verified
+  on the next pass.
 - For prose, the absence of an executable check is normal and not a defect
   of the procedure: the criterion is then an exact before/after quote pair
   plus one sentence of reasoning, all inside the ledger row.
-- "Improve it / polish it / make it clearer" is not a criterion and is
-  rejected right at adjudication.
+- What adjudication rejects as a mere wish instead of a criterion, and
+  what an absence criterion — the level-2 example above is one — names
+  before it is written, are both ruled in 6.25 of
+  references/stage-6-adjudication.md.
 - A criterion that turns out to be unsatisfiable becomes an
   `accepted-residue` with a one-line reason and the user's signature —
   never a silent pass, and never rewritten after the fact into an
   executable form it cannot honestly take. It reaches that status by the
-  nomination route of stage 9: the row waits in `awaiting-signature` with
-  its register entry until the user ratifies it. A criterion that proved a poor
-  choice is a NEW finding on the next pass, not a silent pass.
+  nomination route of 9.19 of references/stage-9-closure.md. A criterion
+  that proved a poor choice is a NEW finding on the next pass, not a
+  silent pass.
 - Record it as the level plus a short name, then the criterion itself:
-  `L2 structural check — the removed wording no longer occurs in {file}`. A
-  refuted or refused row carries exactly the em-dash `—`; an empty cell is
-  allowed to nobody.
+  `L2 structural check — the removed wording no longer occurs in {file}`.
+  What the cell of a refuted or refused row holds is ruled in 6.25 of
+  references/stage-6-adjudication.md.

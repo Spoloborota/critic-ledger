@@ -10,8 +10,8 @@ and pull requests may be read; nothing is promised about them.
 ```sh
 sh tests/run-regression.sh
 uvx pytest==9.1.1 tests/unit -q
-uvx --from shellcheck-py shellcheck -s sh tests/run-regression.sh \
-    skills/critic-ledger/templates/copy-project.sh
+uvx --from shellcheck-py==0.11.0.1 shellcheck -s sh tests/run-regression.sh \
+    skills/critic-ledger/scripts/copy-project.sh
 COVERAGE_FILE=$(mktemp -d)/data uvx --from coverage==7.15.4 \
     --with pytest==9.1.1 sh -c '
     coverage run -m pytest tests/unit -q && coverage combine && coverage report'
@@ -19,13 +19,13 @@ COVERAGE_FILE=$(mktemp -d)/data uvx --from coverage==7.15.4 \
 
 Two test layers, then two checks over them.
 
-- The shell suite: 79 cases against
-  `skills/critic-ledger/templates/recount.py` — the script that arbitrates round
+- The shell suite: 77 cases against
+  `skills/critic-ledger/scripts/recount.py` — the script that arbitrates round
   closure — each named with its expected exit code (`e0`/`e1`/`e2`/`e3`); it
   prints `ALL FIXTURES PASS` and exits 0 when green. The count is re-derived,
   never taken on trust —
   `grep -oE '\bc[0-9]{2}\b' tests/run-regression.sh | sort -u | wc -l`.
-- The pytest suite: characterization tests covering all ten template
+- The pytest suite: characterization tests covering all ten invoked
   scripts as real CLIs —
   the nine Python ones plus `copy-project.sh`, driven through `sh`
   (argv, stdout, exit codes, filesystem effects), written against a pinned
@@ -35,7 +35,8 @@ Two test layers, then two checks over them.
   pin CI runs — so the number read is the number the suite has.
 - The third command lints both shell scripts.
 - The fourth measures
-  coverage of the template scripts — because the suite drives them as
+  coverage of `skills/critic-ledger/scripts/` plus
+  `skills/critic-ledger/templates/otel/` — because the suite drives them as
   subprocesses, coverage.py is configured with `patch = ["subprocess"]` in
   `pyproject.toml`, which makes a `coverage combine` step mandatory and wants
   `COVERAGE_FILE` outside the work tree.

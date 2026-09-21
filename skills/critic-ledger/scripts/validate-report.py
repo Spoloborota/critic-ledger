@@ -85,6 +85,25 @@ import sys
 from pathlib import Path
 from typing import TypedDict
 
+# The severities, the fence-detection grammar and the process exit codes
+# live in ONE place — `scripts/ledger_md.py`, beside this script — so
+# that a report is read the same way by everything that touches the
+# ledger. The import is
+# resolved from THIS script's own directory: the payload ships loose files
+# and there is no installed package (see `pyproject.toml`), so a copy of
+# these scripts without `ledger_md.py` beside them does not run.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# The import sits below the path insert above, which is what makes it work.
+from ledger_md import (
+    EXIT_OK,
+    EXIT_PROBLEMS,
+    EXIT_STRUCTURAL,
+    FENCE_RE,
+    SEVERITIES,
+    unwrap_salvage_fence,
+)
+
 # A report id is ONE lens prefix and a number: the single-segment form
 # of the recount's own id contract (`ID_RE` in recount.py), which
 # additionally accepts a dash-joined composite prefix (`V-CIT-1`).
@@ -100,10 +119,6 @@ PREFIX_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
 MIN_FINDING_CELLS = 2
 # Longest first cell still considered an id rather than prose.
 MAX_ID_CELL_LEN = 40
-# A fence needs an opening and a closing marker before it can wrap anything.
-MIN_FENCE_MARKERS = 2
-# How many finding headings an outer fence must hold to count as a wrapper.
-MIN_WRAPPED_FINDINGS = 2
 # The script takes exactly a report path and an expected prefix.
 EXPECTED_ARG_COUNT = 2
 
@@ -118,7 +133,6 @@ class Finding(TypedDict, total=False):
     end: int
 
 
-ACCEPTED_SEVERITY = ("blocker", "major", "minor")
 # Detection-only vocabulary: words that make a line LOOK like a finding
 # heading even when its id is broken. Never used to accept a severity.
 SEVERITY_ISH = {
@@ -149,7 +163,6 @@ FILELINE_RE = re.compile(
     r"|(?<![A-Za-z0-9_./@+\\-])[A-Z][A-Za-z0-9_-]{2,}:\d+",
 )
 INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
-FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
 CMD_WORDS = {
     "grep",
     "rg",
@@ -244,39 +257,6 @@ def is_finding_line(cells: list[str] | None) -> bool:
     return normalize(cells[1]) in SEVERITY_ISH
 
 
-def unwrap_salvage_fence(lines: list[str]) -> list[str]:
-    """Neutralize an OUTER fence that wraps a whole critic report.
-
-    Some agents deliver their report inside one code fence and the salvage
-    keeps the markers verbatim. Skipping that wrapper as if it were a quote
-    would hide every finding and turn a valid report into "no findings
-    found". The candidate is the FIRST fenced block — the first two
-    markers, paired by the same toggling the scanner uses, NOT the
-    outermost markers of the file (pairing marker[0] with marker[-1]
-    swallows a report that merely has several evidence blocks). It is a
-    wrapper only when its interior holds MORE THAN ONE
-    finding heading and nothing outside it holds any — an evidence quote
-    never looks like that. Markers are blanked in place so line numbers
-    stay exact; fences INSIDE the wrapper keep toggling.
-    """
-    marks = [i for i, ln in enumerate(lines) if FENCE_RE.match(ln)]
-    if len(marks) < MIN_FENCE_MARKERS:
-        return lines
-    first, close = marks[0], marks[1]
-    if any(
-        is_finding_line(split_cells(ln)) for ln in lines[:first] + lines[close + 1 :]
-    ):
-        return lines
-    if (
-        sum(1 for ln in lines[first + 1 : close] if is_finding_line(split_cells(ln)))
-        < MIN_WRAPPED_FINDINGS
-    ):
-        return lines
-    out = list(lines)
-    out[first] = out[close] = "\n"
-    return out
-
-
 def find_findings(lines: list[str]) -> list[Finding]:
     """Return the list of finding headings, each with its block extent.
 
@@ -285,7 +265,19 @@ def find_findings(lines: list[str]) -> list[Finding]:
     """
     found: list[Finding] = []
     in_fence = False
-    for n, raw in enumerate(unwrap_salvage_fence(lines), 1):
+    # The wrapper skeleton lives in `ledger_md.unwrap_salvage_fence` (see
+    # its docstring for what "wrapper" means); this script's own notion of
+    # a finding header is the LOOSE one — a pipe-cell row whose id looks
+    # id-ish or whose second cell reads "severity-ish" (`is_finding_line`).
+    # Skipping that wrapper as if it were a quote would hide every finding
+    # and turn a valid report into "no findings found".
+    for n, raw in enumerate(
+        unwrap_salvage_fence(
+            lines,
+            is_finding=lambda ln: is_finding_line(split_cells(ln)),
+        ),
+        1,
+    ):
         if FENCE_RE.match(raw):  # ``` / ~~~ toggles a code block
             in_fence = not in_fence
             continue
@@ -370,11 +362,11 @@ def check_findings(found: list[Finding], prefix: str) -> tuple[list[str], list[s
                 f"{prefix!r}{hint}",
             )
         sev = normalize(f["severity"])
-        if sev not in ACCEPTED_SEVERITY:
+        if sev not in SEVERITIES:
             problems.append(
                 f"{loc}: {f['id']}: severity {f['severity']!r} "
                 f"is not one of the literals "
-                f"{', '.join(ACCEPTED_SEVERITY)}",
+                f"{', '.join(SEVERITIES)}",
             )
         key = f["id"].lower()
         if key in seen:
@@ -392,23 +384,23 @@ def main() -> int:
     args = sys.argv[1:]
     if any(a in ("-h", "--help") for a in args):
         print(__doc__)
-        return 0
+        return EXIT_OK
     if len(args) != EXPECTED_ARG_COUNT:
         print(__doc__)
-        return 2
+        return EXIT_STRUCTURAL
     path, prefix = args
     if not PREFIX_RE.match(prefix):
         print(
             f"bad expected prefix {prefix!r}: it must start with a letter "
             f"and contain only letters and digits",
         )
-        return 2
+        return EXIT_STRUCTURAL
     try:
         with Path(path).open(encoding="utf-8") as fh:
             lines = fh.readlines()
     except (OSError, UnicodeDecodeError) as exc:
         print(f"cannot read report {path!r}: {exc}")
-        return 2
+        return EXIT_STRUCTURAL
 
     found = find_findings(lines)
     problems, suspicious = check_findings(found, prefix)
@@ -476,7 +468,7 @@ def main() -> int:
         f"summary: findings={len(found)} problems={len(problems)} "
         f"suspicious={len(suspicious)} notes={len(notes)}",
     )
-    return 1 if problems else 0
+    return EXIT_PROBLEMS if problems else EXIT_OK
 
 
 if __name__ == "__main__":

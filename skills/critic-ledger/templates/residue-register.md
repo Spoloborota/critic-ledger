@@ -4,7 +4,7 @@
      in the ROOT of the project's `.critic-ledger/` directory and NEVER
      inside a run folder: the register outlives every run, and a run folder
      is deleted, archived and superseded on its own schedule. That address
-     is also the convention `templates/recount.py` derives when it is given
+     is also the convention `scripts/recount.py` derives when it is given
      no `--register <path>`. -->
 
 <!-- WHAT IT IS. One row per finding that was NOMINATED into residue — a
@@ -39,7 +39,7 @@
 | run-qualified id | severity | claim-hook | rationale | compensating-control | review-by | status | origin-run |
 |---|---|---|---|---|---|---|---|
 
-<!-- CELL CONTRACT — `templates/recount.py` parses this table and fails
+<!-- CELL CONTRACT — `scripts/recount.py` parses this table and fails
      CLOSED on any violation (exit 2, the same rule as a malformed ledger
      row). A literal pipe inside any cell MUST be escaped as `\|`.
 
@@ -63,9 +63,11 @@
                            major, 1 year for a minor. Both numbers are OURS,
                            marked as ours; no standard supplies them.
      `status`            — `nominated <date>` -> `ratified <date>` ->
-                           `expired-reopened <date>`, each carrying the date
-                           it was set. The last may carry its cycle counter
-                           as `expired-reopened <date> (#<n>)`.
+                           `expired-reopened <date>`, or `nominated <date>`
+                           -> `withdrawn <date>` when the nomination is
+                           withdrawn, each carrying the date it was set. Only
+                           the expired-reopened status may carry its cycle
+                           counter, as `expired-reopened <date> (#<n>)`.
      `origin-run`        — the run folder the nomination was made in. It
                            stays put when the row is carried across later
                            rounds. -->
@@ -79,8 +81,11 @@
 - **An UNRATIFIED nomination expires too.** A row left in `nominated` for
   more than 30 days (ours, marked as ours) is printed as
   `NOMINATION OVERDUE` and goes to the owner as its own fork: ratify it,
-  withdraw the nomination — the row returns to adjudication as an open
-  finding — or set a new date on the owner's explicit word. A permanently
+  withdraw the nomination — the row's status becomes `withdrawn <date>`,
+  and the finding goes back to stage 6 of its round as an open finding
+  while its round is open, and enters the next round on this object as a
+  re-opened finding once that round is closed — or set a new date on the
+  owner's explicit word. A permanently
   `nominated` row is banned: every row has a ratification, an escalation, or
   a way back into the open findings.
 - **`review-by` passing RE-OPENS by default,** never renews in silence. The

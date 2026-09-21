@@ -6,7 +6,13 @@ git repositories used here are throwaway ones created inside tmp_path; the
 script itself only ever runs read-only git subcommands.
 
 Exit codes: 0 = a listing was produced (an empty one included), 2 = a
-fail-closed argument, repository, commit or pathspec error.
+fail-closed argument, repository, commit or pathspec error, a `--repo` that
+has no working tree (a bare repository, or a git directory such as
+`<repo>/.git`) included. When exit 2 comes from one of the fail-closed
+checks that run before the first line is printed (arguments, repository,
+working tree, commits and range, pathspecs), nothing is printed to stdout;
+a git failure on a commit after the listing has begun still exits 2, after
+the lines already printed.
 """
 
 from __future__ import annotations
@@ -100,18 +106,64 @@ def test_paths_swallows_following_positionals(run, repo_two_commits):
             "with a bare '--'" in res.stderr)
 
 
+@pytest.mark.parametrize(
+    "case", ["unknown-commit", "empty-range", "pathspec-matching-nothing"]
+)
+def test_a_fail_closed_error_prints_nothing_to_stdout(run, repo_two_commits, case):
+    """Exit 2 leaves stdout empty: `REPO` is printed only after every check.
+
+    Each of these errors is found AFTER the repository itself resolved, so a
+    `REPO` line printed as soon as the root is known would reach stdout
+    ahead of it, and a reader of stdout alone would see a listing begin.
+    """
+    repo, _, second = repo_two_commits
+    args = {
+        "unknown-commit": ("deadbee",),
+        "empty-range": ("--range", f"{second}..{second}"),
+        "pathspec-matching-nothing": (second, "--paths", "ghost.txt"),
+    }[case]
+    res = run(SCRIPT, "--repo", repo.path, *args)
+    assert res.returncode == 2, res.stdout
+    assert res.stdout == ""
+    assert res.stderr.startswith("ERROR: "), res.stderr
+
+
+@pytest.mark.parametrize("target", ["git-directory", "bare-repository"])
+def test_a_repository_without_a_working_tree_is_refused(
+    run, repo_two_commits, target
+):
+    """A `--repo` with no working tree is exit 2, with nothing on stdout.
+
+    A git directory such as `<repo>/.git` and a bare repository both pass
+    `git rev-parse --git-dir`, but neither has a working tree whose root
+    the listing could name.
+    """
+    repo, _, second = repo_two_commits
+    if target == "git-directory":
+        path = repo.path / ".git"
+    else:
+        path = repo.path.parent / "bare.git"
+        repo.git("clone", "-q", "--bare", str(repo.path), str(path))
+    res = run(SCRIPT, "--repo", path, second)
+    assert res.returncode == 2, res.stdout
+    assert res.stdout == ""
+    assert f"ERROR: {str(path)!r} has no working tree" in res.stderr
+
+
 # --- the listing -----------------------------------------------------------
 
 def test_single_commit_listing(run, repo_two_commits):
     repo, _, second = repo_two_commits
+    toplevel = repo.git("rev-parse", "--show-toplevel").stdout.strip()
     res = run(SCRIPT, "--repo", repo.path, second)
     assert res.returncode == 0, res.stderr
     lines = res.stdout.splitlines()
-    assert lines[0] == f"COMMIT {second} second"
-    assert lines[1] == "file.txt:2: b"
-    assert lines[2] == f"SUBTOTAL {second[:7]}: 1 deleted lines in 1 files"
-    assert lines[3] == ""
-    assert lines[4] == "TOTAL DELETED LINES: 1 (across 1 files, 1 commits)"
+    assert lines[0] == f"REPO {toplevel}"
+    assert lines[1] == f"COMMIT {second} second"
+    assert lines[2] == "file.txt:2: b"
+    assert lines[3] == f"SUBTOTAL {second[:7]}: 1 deleted lines in 1 files"
+    assert lines[4] == ""
+    assert lines[5] == "TOTAL DELETED LINES: 1 (across 1 files, 1 commits)"
 
 
 def test_repo_defaults_to_the_working_directory(run, repo_two_commits):
@@ -119,6 +171,19 @@ def test_repo_defaults_to_the_working_directory(run, repo_two_commits):
     res = run(SCRIPT, second, cwd=repo.path)
     assert res.returncode == 0, res.stderr
     assert "file.txt:2: b" in res.stdout
+
+
+def test_repo_subdirectory_prints_the_resolved_root(run, repo_two_commits):
+    """Started from a subdirectory, the first line names the repository root."""
+    repo, _, second = repo_two_commits
+    sub = repo.path / "sub"
+    sub.mkdir()
+    toplevel = repo.git("rev-parse", "--show-toplevel").stdout.strip()
+    res = run(SCRIPT, second, cwd=sub)
+    assert res.returncode == 0, res.stderr
+    lines = res.stdout.splitlines()
+    assert lines[0] == f"REPO {toplevel}"
+    assert lines[1] == f"COMMIT {second} second"
 
 
 def test_commit_without_deletions_yields_an_empty_listing(run, repo_two_commits):

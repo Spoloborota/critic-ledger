@@ -1,7 +1,8 @@
 """Characterization tests for set-cell.py.
 
-The script writes ONE cell (`fix`, `verified` or `terminal`) of ONE row of
-a ledger's findings table. Exit codes: 0 = the cell holds the value (help
+The script writes ONE cell of ONE row of a ledger's findings table: the
+three the fix and verification stages own (`fix`, `verified`, `terminal`)
+and the three the adjudicator owns (`zone`, `verdict`, `criterion`). Exit codes: 0 = the cell holds the value (help
 is 0 too), 2 = structural or usage error and nothing was written.
 
 The cases the requirement names by hand are all here: a row with an EMPTY
@@ -10,8 +11,10 @@ pipe, a value carrying a newline, an id that is not a row, and the
 successful write with its `OK <id>.<column>` line. Two more classes are
 pinned because they are the reason the script exists: nothing but the
 target cell may move in the file, and the row grammar must be the SAME one
-`recount.py` and `transcribe.py` use — the last is asserted by running one
-fixture set through all three implementations.
+`recount.py` and `transcribe.py` use — which since
+`scripts/ledger_md.py` exists is no longer a matter of copies
+agreeing but of one owner, asserted here as BOTH: the same fixture set read
+identically, and the same function object behind every reader.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ import sys
 
 import pytest
 
-from conftest import HEADER_7, HEADER_8, HEADER_9
+from conftest import HEADER_7, HEADER_8, HEADER_9, MODULE_NAMES
 
 SCRIPT = "set-cell.py"
 
@@ -186,6 +189,24 @@ def test_a_value_carrying_a_pipe_is_refused(run, ledger, value):
     assert res.returncode == 2
     assert "STRUCTURAL ERRORS — nothing was written:" in res.stdout
     assert "carries a pipe" in res.stdout
+    assert read(path) == before
+
+
+def test_pipe_in_value_refuses_loudly(run, ledger):
+    """The refusal names the cell, the position and the escaped form.
+
+    The silent version of this rejection cost one round three cells that
+    nothing but a recount noticed were missing.
+    """
+    path = ledger(ROW_8 + "\n")
+    before = read(path)
+    res = run(SCRIPT, "--ledger", path, "--id", "GA-1", "--column", "verdict",
+              "--value", "upheld | refuted")
+    assert res.returncode != 0
+    assert "verdict" in res.stdout
+    assert "refused" in res.stdout
+    assert "position 8" in res.stdout
+    assert "upheld \\| refuted" in res.stdout
     assert read(path) == before
 
 
@@ -377,26 +398,105 @@ def test_an_unknown_argument_is_refused(run, ledger):
     assert "unknown argument(s): --force" in res.stdout
 
 
-@pytest.mark.parametrize("column", ["zone", "verdict", "criterion", "claim", ""])
-def test_only_the_three_writable_columns_are_accepted(run, ledger, column):
+@pytest.mark.parametrize("column", ["claim", "severity", "id", ""])
+def test_only_the_six_writable_columns_are_accepted(run, ledger, column):
     path = ledger(ROW_8 + "\n")
     before = read(path)
     res = run(SCRIPT, "--ledger", path, "--id", "GA-1", "--column", column,
               "--value", "x")
     assert res.returncode == 2
-    assert "is not one of fix/verified/terminal" in res.stdout
+    assert ("is not one of fix/verified/terminal/zone/verdict/criterion"
+            in res.stdout)
     assert read(path) == before
+
+
+# --- the adjudicator's three cells -----------------------------------------
+
+
+@pytest.mark.parametrize(("column", "index"), [("verdict", 3), ("criterion", 4)])
+def test_the_adjudication_cells_of_a_v2_row_are_written(run, ledger, column,
+                                                        index):
+    """`verdict` and `criterion` exist at width 8; `zone` does not."""
+    path = ledger(ROW_8 + "\n")
+    res = run(SCRIPT, "--ledger", path, "--id", "GA-1", "--column", column,
+              "--value", "decided")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert res.stdout == f"OK GA-1.{column}\n"
+    assert cells(read(path).splitlines()[2])[index] == "decided"
+
+
+@pytest.mark.parametrize(("column", "index"),
+                         [("zone", 2), ("verdict", 4), ("criterion", 5)])
+def test_the_adjudication_cells_of_a_v3_row_are_written(run, ledger, column,
+                                                        index):
+    """At width 9 the zone column exists and `verdict` has moved one right."""
+    path = ledger(ROW_9 + "\n", header=HEADER_9)
+    res = run(SCRIPT, "--ledger", path, "--id", "GA-1", "--column", column,
+              "--value", "Z2" if column == "zone" else "decided")
+    assert res.returncode == 0, res.stdout + res.stderr
+    written = cells(read(path).splitlines()[2])[index]
+    assert written == ("Z2" if column == "zone" else "decided")
+
+
+@pytest.mark.parametrize("column", ["zone", "criterion"])
+def test_a_cell_the_schema_does_not_have_is_refused(run, ledger, column):
+    """A v1 row has neither a zone nor a criterion: the cell is not invented."""
+    path = ledger(ROW_7 + "\n", header=HEADER_7)
+    before = read(path)
+    res = run(SCRIPT, "--ledger", path, "--id", "GA-1", "--column", column,
+              "--value", "x")
+    assert res.returncode == 2
+    assert f"has no `{column}` cell" in res.stdout
+    assert read(path) == before
+
+
+# --- the closed round is frozen evidence -----------------------------------
+
+
+@pytest.mark.parametrize("column", ["fix", "verdict"])
+def test_a_closed_ledger_is_refused_in_one_line(run, ledger, column):
+    """A closed round is never written into, by any column."""
+    path = ledger(ROW_8 + "\n",
+                  preamble="# Ledger\n\n- Ledger state: closed 2026-01-01\n\n")
+    before = read(path)
+    res = run(SCRIPT, "--ledger", path, "--id", "GA-1", "--column", column,
+              "--value", "x")
+    assert res.returncode == 2
+    body = res.stdout.splitlines()
+    assert body[0] == "STRUCTURAL ERRORS — nothing was written:"
+    assert len(body) == 2, res.stdout
+    assert "the round is CLOSED" in body[1]
+    assert read(path) == before
+
+
+def test_an_open_ledger_is_still_written(run, ledger):
+    """The freeze reads the state, not the mere presence of the field."""
+    path = ledger(ROW_8 + "\n",
+                  preamble="# Ledger\n\n- Ledger state: open\n\n")
+    res = run(SCRIPT, "--ledger", path, "--id", "GA-1", "--column", "fix",
+              "--value", "x")
+    assert res.returncode == 0, res.stdout
+
+
+def test_an_owner_signature_reaches_the_cell_byte_for_byte(run, ledger):
+    """Nothing in a signature is normalised: it is the owner's, not ours."""
+    path = ledger(ROW_8 + "\n")
+    signature = "user-signed  2026-01-01"
+    res = run(SCRIPT, "--ledger", path, "--id", "GA-1", "--column", "terminal",
+              "--value", signature)
+    assert res.returncode == 0, res.stdout
+    assert f"| {signature} |" in read(path).splitlines()[2]
 
 
 @pytest.mark.parametrize("flag", ["-h", "--help"])
 def test_help_prints_the_contract_and_exits_zero(run, flag):
     res = run(SCRIPT, flag)
     assert res.returncode == 0
-    assert "--column <fix|verified|terminal>" in res.stdout
+    assert "--column <fix|verified|terminal|zone|verdict|criterion>" in res.stdout
     assert "OK <id>.<column>" in res.stdout
 
 
-# --- one grammar, three scripts --------------------------------------------
+# --- one grammar, every reader ---------------------------------------------
 
 
 def load(scripts_dir, name):
@@ -408,6 +508,41 @@ def load(scripts_dir, name):
     spec.loader.exec_module(module)
     return module
 
+
+# The grammar names `scripts/ledger_md.py` owns. A script may expose any
+# of them by importing it, and none of them by defining it.
+GRAMMAR_NAMES = (
+    "split_row",
+    "split_raw",
+    "escape_cell",
+    "value_error",
+    "header_field",
+    "scan_findings",
+    "find_table",
+    "find_rows",
+    "write_atomic",
+    "row_schema_error",
+    "findings_header_width",
+    "cell_index",
+    "replace_cell",
+    "write_cell",
+    "SEVERITIES",
+    "BLANK_CELL",
+    "FENCE_RE",
+    "MIN_FENCE_MARKERS",
+    "MIN_WRAPPED_FINDINGS",
+    "ZONE_PLACEHOLDER",
+    "SEPARATOR_RE",
+    "scan_table",
+    "unwrap_salvage_fence",
+)
+
+# `validate-report.py` deliberately keeps its OWN, narrower id regex
+# instead of importing `ledger_md.ID_PATTERN` — see the comment directly
+# above `ID_RE` in that script. `ID_RE` is not part of `GRAMMAR_NAMES`, so
+# this exclusion never fires today; it is named so that adding such a
+# grammar name later cannot silently fork the script's own id regex.
+VALIDATE_REPORT_EXCLUDED_NAMES = ("ID_RE",)
 
 GRAMMAR_FIXTURES = [
     "| GA-1 | major | a claim | upheld |  |  |  |  |",
@@ -424,19 +559,55 @@ GRAMMAR_FIXTURES = [
 
 
 @pytest.mark.parametrize("line", GRAMMAR_FIXTURES)
-def test_the_three_scripts_read_a_row_identically(scripts_dir, line):
-    """set-cell.py must not fork a second cell grammar.
+def test_every_reader_of_a_row_uses_the_one_grammar(scripts_dir, line):
+    """No script may fork a second cell grammar.
 
     `recount.py` counts the rows, `transcribe.py` lays them out and
-    `set-cell.py` writes into them; a divergence between the three would
-    show up as a cell written into the wrong place, which is the class of
-    defect all three exist to remove.
+    `set-cell.py` writes into them; a divergence between them shows up as
+    a cell read from the wrong place, which is the class of defect they
+    exist to remove — and one reader had already drifted while the grammar
+    lived in hand-made copies.
+    The one owner is `scripts/ledger_md.py`, and the assertion is both
+    that the readings agree and that they are the SAME function.
+
+    `validate-report.py` joins the module list here too, but it is checked
+    only for the names it actually imports from `ledger_md`: it defines no
+    grammar name of its own, and its own id regex `ID_RE` is not a grammar
+    name — it is listed in `VALIDATE_REPORT_EXCLUDED_NAMES` only to make
+    that explicit.
+
+    The modules `recount.py` is split into join the list as well, derived
+    from `MODULE_NAMES`: after the split the recount's grammar consumers
+    live there, so a grammar name one of them re-defined would otherwise
+    never be looked at. `ledger_md.py` itself is left out, because it is
+    the owner every reader is compared against. The modules are loaded
+    after the scripts, whose own directory insert is what lets the modules'
+    imports of their siblings resolve.
     """
-    recount = load(scripts_dir, "recount.py")
-    transcribe = load(scripts_dir, "transcribe.py")
-    set_cell = load(scripts_dir, SCRIPT)
-    assert set_cell.split_row(line) == recount.split_row(line)
-    assert set_cell.split_row(line) == transcribe.split_row(line)
+    modules = [
+        (script_name, load(scripts_dir, script_name))
+        for script_name in (
+            "recount.py",
+            "transcribe.py",
+            SCRIPT,
+            "validate-report.py",
+            *(name for name in MODULE_NAMES if name != "ledger_md.py"),
+        )
+    ]
+    shared = sys.modules["ledger_md"]
+    expected = shared.split_row(line)
+    for script_name, module in modules:
+        # Every grammar name a script still exposes must BE the module's own
+        # object: a name that is merely equal is a copy waiting to drift.
+        for name in GRAMMAR_NAMES:
+            if script_name == "validate-report.py" and name in VALIDATE_REPORT_EXCLUDED_NAMES:
+                continue
+            own = getattr(module, name, None)
+            if own is not None:
+                assert own is getattr(shared, name), f"{module.__name__}.{name}"
+        reader = getattr(module, "split_row", None)
+        if reader is not None:
+            assert reader(line) == expected
 
 
 def test_the_written_row_still_recounts(run, ledger):

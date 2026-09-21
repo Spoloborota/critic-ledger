@@ -1,7 +1,7 @@
 """Shared fixtures for the CLI characterization suite.
 
-The suite pins the CURRENT observable behavior of the seven standalone,
-stdlib-only CLI scripts that ship under `skills/critic-ledger/templates/`,
+The suite pins the CURRENT observable behavior of the nine standalone,
+stdlib-only CLI scripts that ship under `skills/critic-ledger/scripts/`,
 plus the one shipped POSIX-shell script (`copy-project.sh`, driven through
 `sh` by the `run_sh` fixture). Every script is exercised through a real
 subprocess call, because argv, stdout/stderr, exit codes and filesystem
@@ -9,9 +9,13 @@ effects are the contract those scripts publish.
 
 The directory holding the scripts under test is resolved once, from the
 `CRITIC_LEDGER_SCRIPTS_DIR` environment variable, and falls back to the
-repository-relative `skills/critic-ledger/templates/`. That single
+repository-relative `skills/critic-ledger/scripts/`. That single
 indirection lets the same suite validate a copy of the scripts (a
-pre-refactor snapshot, a candidate build) without editing a test.
+pre-refactor snapshot, a candidate build) without editing a test. Since
+`ledger_md.py` exists, the variable names a directory that MUST hold that
+module BESIDE the scripts: three of them import the ledger grammar from
+their own directory, so a copy without it is not a runnable copy, and the
+presence check below fails such a directory before any test runs.
 
 Safety rules the fixtures enforce:
 
@@ -36,7 +40,28 @@ import pytest
 
 SCRIPTS_DIR_ENV = "CRITIC_LEDGER_SCRIPTS_DIR"
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_SCRIPTS_DIR = REPO_ROOT / "skills" / "critic-ledger" / "templates"
+
+
+def text_of(path):
+    return path.read_text(encoding="utf-8")
+
+
+# A published asset would have been the other way of showing a round; the
+# text block in the README is the decision, and these extensions are what it
+# ruled out.
+BINARY_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".cast")
+
+# Directories nothing is authored in and nothing ships from.
+NON_SOURCE_DIRS = frozenset(
+    {".git", ".venv", "__pycache__", ".pytest_cache", ".ruff_cache",
+     ".mypy_cache", "node_modules"}
+)
+
+DEFAULT_SCRIPTS_DIR = REPO_ROOT / "skills" / "critic-ledger" / "scripts"
+# The prompts and skeletons ship in a directory of their own, beside the
+# scripts. It is not redirected by `CRITIC_LEDGER_SCRIPTS_DIR`: that variable
+# names a copy of the SCRIPTS, and these files are not scripts.
+DEFAULT_TEMPLATES_DIR = REPO_ROOT / "skills" / "critic-ledger" / "templates"
 
 SCRIPT_NAMES = (
     "check-frontmatter.py",
@@ -52,13 +77,21 @@ SCRIPT_NAMES = (
 # through `sh` by the `run_sh` fixture, never through the interpreter.
 SHELL_SCRIPT_NAMES = ("copy-project.sh",)
 
-# The two shipped scripts this conftest CHECKS FOR but never runs: their own
-# modules (`test_trace.py`, `test_rollup.py`) drive them through a private
-# subprocess helper rather than through the `run` fixture, and `SCRIPT_NAMES`
-# is that fixture's execution whitelist. They are named separately so that
-# the presence check below covers all ten shipped scripts while the whitelist
-# — and what those two modules say about it — stays exactly as it was.
-CHECKED_ONLY_NAMES = ("trace.py", "rollup.py")
+# Shipped Python that is first of all a MODULE: the scripts above import
+# each of these from this same directory, which is why the presence check
+# must see them — a scripts directory without one of them is broken.
+# `ledger_md.py` also carries ONE command (`new`), which `test_ledger_md.py`
+# drives through its own subprocess call rather than through the `run`
+# fixture, so it stays out of that fixture's execution whitelist; the five
+# modules `recount.py` is split into carry no command at all.
+MODULE_NAMES = (
+    "ledger_md.py",
+    "ledger_model.py",
+    "statuses.py",
+    "structural_checks.py",
+    "metrics.py",
+    "report.py",
+)
 
 MANIFEST_NAME = "critic-ledger-manifest.json"
 MANIFEST_VERSION = "critic-ledger/scratchpad-manifest@1"
@@ -103,12 +136,28 @@ def scripts_dir() -> Path:
                     f"(set {SCRIPTS_DIR_ENV} to override)")
     missing = [
         n
-        for n in (*SCRIPT_NAMES, *SHELL_SCRIPT_NAMES, *CHECKED_ONLY_NAMES)
+        for n in (
+            *SCRIPT_NAMES,
+            *SHELL_SCRIPT_NAMES,
+            *MODULE_NAMES,
+        )
         if not (directory / n).is_file()
     ]
     if missing:
         pytest.fail(f"scripts missing from {directory}: {', '.join(missing)}")
     return directory
+
+
+@pytest.fixture(scope="session")
+def templates_dir() -> Path:
+    """Directory holding the shipped prompts and skeletons.
+
+    Always the repository's own: a redirected scripts directory does not
+    move the templates, which stay where the skill addresses them.
+    """
+    if not DEFAULT_TEMPLATES_DIR.is_dir():
+        pytest.fail(f"templates directory does not exist: {DEFAULT_TEMPLATES_DIR}")
+    return DEFAULT_TEMPLATES_DIR
 
 
 @pytest.fixture
